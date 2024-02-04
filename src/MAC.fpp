@@ -29,23 +29,6 @@ module MAC
       generic, public :: get => get_integer_property, get_integer_array_property
   end type
 
-  public :: specify
-  public :: ind
-  public :: memory_layout
-  public :: array_layout
-  public :: get_size
-  public :: get_property
-
-  interface ind
-    module procedure :: memory_layout
-    module procedure :: array_layout
-  end interface
-
-  interface get_property
-    module procedure :: get_integer_property
-    module procedure :: get_integer_array_property
-  end interface
-
   type, extends(container_specifier), public :: container
     private
     integer :: container_type = 0
@@ -79,24 +62,13 @@ module MAC
                                 get_acdp, get_mcdp
   end type
 
-  public :: construct
-#:for name in interface_names
-  public :: ${name}$
-#:endfor
-
-#:for name in interface_names
-  interface ${name}$
-#:for suffix in suffixes
-    module procedure :: ${name}$_a${suffix}$
-    module procedure :: ${name}$_m${suffix}$
-#:if name == 'set'
-    module procedure :: ${name}$_g${suffix}$
-#:endif
-#:endfor
-  end interface
-
-#:endfor
 contains
+
+  pure subroutine partial_permutation(self, variables, dictionary)
+    class(container_specifier), intent(in) :: self
+    integer, intent(in) :: variables(:)
+    integer, allocatable, intent(out) :: dictionary(:, :)
+  end subroutine
 
   subroutine specify(self, dimension_specifier, lower_bounds, layout)
     class(container_specifier), intent(out) :: self

@@ -21,24 +21,8 @@ module MAC
     procedure, pass(self) :: get_integer_property
     procedure, pass(self) :: get_integer_array_property
     generic, public :: get => get_integer_property, get_integer_array_property
+    procedure, public, pass(self) :: partial_permutation
   end type
-
-  public :: specify
-  public :: ind
-  public :: memory_layout
-  public :: array_layout
-  public :: get_size
-  public :: get_property
-
-  interface ind
-    module procedure :: memory_layout
-    module procedure :: array_layout
-  end interface
-
-  interface get_property
-    module procedure :: get_integer_property
-    module procedure :: get_integer_array_property
-  end interface
 
   type, extends(container_specifier), public :: container
     private
@@ -73,47 +57,72 @@ module MAC
       get_acdp, get_mcdp
   end type
 
-  public :: construct
-  public :: set
-  public :: get
-
-  interface set
-    module procedure :: set_al
-    module procedure :: set_ml
-    module procedure :: set_gl
-    module procedure :: set_ai
-    module procedure :: set_mi
-    module procedure :: set_gi
-    module procedure :: set_ar
-    module procedure :: set_mr
-    module procedure :: set_gr
-    module procedure :: set_ac
-    module procedure :: set_mc
-    module procedure :: set_gc
-    module procedure :: set_ardp
-    module procedure :: set_mrdp
-    module procedure :: set_grdp
-    module procedure :: set_acdp
-    module procedure :: set_mcdp
-    module procedure :: set_gcdp
-  end interface
-
-  interface get
-    module procedure :: get_al
-    module procedure :: get_ml
-    module procedure :: get_ai
-    module procedure :: get_mi
-    module procedure :: get_ar
-    module procedure :: get_mr
-    module procedure :: get_ac
-    module procedure :: get_mc
-    module procedure :: get_ardp
-    module procedure :: get_mrdp
-    module procedure :: get_acdp
-    module procedure :: get_mcdp
-  end interface
-
 contains
+
+  pure subroutine partial_permutation(self, variables, dictionary)
+    class(container_specifier), intent(in) :: self
+    integer, intent(in) :: variables(:)
+    integer, allocatable, intent(out) :: dictionary(:, :)
+
+    character(len=1024) :: errormsg
+    integer :: istat, i, n
+    integer :: counter, reduction
+
+    if (.not. self%specifier_initialized) error stop "MAC: Error #6: container specifier not initalized."
+    if (size(variables) > size(self%dimension_specifier)) error stop "MAC: Error #12: size of variables array is larger than rank."
+    if (size(variables) == 0) error stop "MAC: Error #13: size of variables must be greater than 0."
+
+    do i = 1, size(variables)
+      if ((variables(i) < 1) .or. (variables(i) > size(self%dimension_specifier))) then
+        write (errormsg, "(i20)") i
+        errormsg = "MAC: Error #14: variables("//trim(adjustl(errormsg))//") does not reference a valid dimension index."
+        error stop trim(errormsg)
+      endif
+    enddo
+
+    n = 1
+    do i = 1, size(variables)
+      n = n*self%dimension_specifier(variables(i))
+    enddo
+
+    allocate (dictionary(n, size(self%dimension_specifier)), stat=istat)
+    if (istat /= 0) then
+      write (errormsg, "(i20)") istat
+      errormsg = "MAC: Error #3: failure allocating permutation dictionary. stat = "//trim(adjustl(errormsg))//"."
+      error stop trim(errormsg)
+    endif
+
+    dictionary = 1
+
+    do i = 1, n
+
+      associate (array_layout=>dictionary(i, :))
+        select case (self%layout)
+        case (0)
+          reduction = i
+          do counter = 1, size(variables) - 1
+            array_layout(variables(counter)) = modulo(reduction, self%dimension_specifier(variables(counter)))
+            if (array_layout(variables(counter)) == 0) &
+              array_layout(variables(counter)) = self%dimension_specifier(variables(counter))
+            reduction = int((reduction - array_layout(variables(counter)))/self%dimension_specifier(variables(counter))) + 1
+          enddo
+          array_layout(variables(counter)) = reduction
+        case (1)
+          reduction = i
+          do counter = size(variables), 2, -1
+            array_layout(variables(counter)) = modulo(reduction, self%dimension_specifier(variables(counter)))
+            if (array_layout(variables(counter)) == 0) &
+              array_layout(variables(counter)) = self%dimension_specifier(variables(counter))
+            reduction = int((reduction - array_layout(variables(counter)))/self%dimension_specifier(variables(counter))) + 1
+          enddo
+          array_layout(variables(1)) = reduction
+        end select
+        array_layout = array_layout + self%lower_bounds - 1
+      end associate
+
+    enddo
+
+  end subroutine
 
   subroutine specify(self, dimension_specifier, lower_bounds, layout)
     class(container_specifier), intent(out) :: self

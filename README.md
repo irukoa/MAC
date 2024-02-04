@@ -49,6 +49,6 @@ An automated build is available for [Fortran Package Manager](https://fpm.fortra
 
 ```
 [dependencies]
-MAC =
+MAC = { git="https://github.com/irukoa/MAC.git" }
 ```
 to the `fpm.toml` file.

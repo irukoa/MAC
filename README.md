@@ -1,3 +1,6 @@
+[![Language](https://img.shields.io/badge/-Fortran-734f96?logo=fortran&logoColor=white)](https://github.com/topics/fortran)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.10615838.svg)](https://doi.org/10.5281/zenodo.10615838)
+[![Testing suite](https://github.com/irukoa/MAC/actions/workflows/CI.yml/badge.svg)](https://github.com/irukoa/MAC/actions/workflows/CI.yml)
 # MAC
 ### Multidimensional Array Containers.
 

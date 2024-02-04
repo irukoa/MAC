@@ -1,0 +1,24 @@
+cff-version: 1.2.0
+title: MAC
+message: Multidimensional Array Containers
+type: software
+authors:
+  - given-names: Álvaro
+    family-names: R. Puente-Uriona
+    email: alvaro.ruiz@ehu.eus
+    affiliation: UPV/EHU
+    orcid: 'https://orcid.org/0000-0003-1915-8804'
+identifiers:
+  - type: doi
+    value: 10.5281/zenodo.10615838
+    description: Zenodo
+repository-code: 'https://github.com/irukoa/MAC'
+url: 'https://github.com/irukoa/MAC'
+abstract: >-
+  Multidimensional Array Containers. A Fortran library with
+  utilities to create and manipulate arrays of generic rank.
+keywords:
+  - Fortran
+  - Generic programming
+  - Data structures
+license: GPL-3.0

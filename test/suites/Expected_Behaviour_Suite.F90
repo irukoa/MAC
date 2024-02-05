@@ -43,7 +43,7 @@ contains
         endif
       enddo
       do i = 1, r%size()
-        call r%set(value=real(i, wp), at=r%ind(i))
+        call r%set(val=real(i, wp), at=r%ind(i))
       enddo
       if (abs((sum(r%rdp_storage)) - 100001.0_wp*50000.0_wp) > 50000.0_wp*epsilon(1.0_wp)) then
         allocate (error)

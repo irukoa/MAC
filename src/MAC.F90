@@ -9,18 +9,21 @@ module MAC
     private
     integer, allocatable :: dimension_specifier(:)
     integer, allocatable :: lower_bounds(:)
-    integer :: layout = 0
+    integer :: lyt = 0
     logical :: specifier_initialized = .false.
   contains
     private
     procedure, public, pass(self) :: specify
-    procedure, pass(self) :: memory_layout
     procedure, pass(self) :: array_layout
+    procedure, pass(self) :: memory_layout
     generic, public :: ind => memory_layout, array_layout
     procedure, pass(self), public :: size => get_size
-    procedure, pass(self) :: get_integer_property
-    procedure, pass(self) :: get_integer_array_property
-    generic, public :: get => get_integer_property, get_integer_array_property
+    procedure, pass(self), public :: rank => get_rank
+    procedure, pass(self), public :: shape => get_shape
+    procedure, pass(self), public :: lbounds => get_lbounds
+    procedure, pass(self), public :: ubounds => get_ubounds
+    procedure, pass(self), public :: layout => get_layout
+    procedure, pass(self), public :: spec_init => get_is_specifier_initailized
     procedure, public, pass(self) :: partial_permutation
   end type
 
@@ -37,6 +40,8 @@ module MAC
   contains
     private
     procedure, public, pass(self) :: construct
+    procedure, pass(self), public :: cont_type => get_container_type
+    procedure, pass(self), public :: cont_init => get_is_container_initailized
     procedure, pass(self) :: set_al, set_ml, set_gl, get_al, get_ml
     procedure, pass(self) :: set_ai, set_mi, set_gi, get_ai, get_mi
     procedure, pass(self) :: set_ar, set_mr, set_gr, get_ar, get_mr
@@ -58,71 +63,6 @@ module MAC
   end type
 
 contains
-
-  pure subroutine partial_permutation(self, variables, dictionary)
-    class(container_specifier), intent(in) :: self
-    integer, intent(in) :: variables(:)
-    integer, allocatable, intent(out) :: dictionary(:, :)
-
-    character(len=1024) :: errormsg
-    integer :: istat, i, n
-    integer :: counter, reduction
-
-    if (.not. self%specifier_initialized) error stop "MAC: Error #6: container specifier not initalized."
-    if (size(variables) > size(self%dimension_specifier)) error stop "MAC: Error #12: size of variables array is larger than rank."
-    if (size(variables) == 0) error stop "MAC: Error #13: size of variables must be greater than 0."
-
-    do i = 1, size(variables)
-      if ((variables(i) < 1) .or. (variables(i) > size(self%dimension_specifier))) then
-        write (errormsg, "(i20)") i
-        errormsg = "MAC: Error #14: variables("//trim(adjustl(errormsg))//") does not reference a valid dimension index."
-        error stop trim(errormsg)
-      endif
-    enddo
-
-    n = 1
-    do i = 1, size(variables)
-      n = n*self%dimension_specifier(variables(i))
-    enddo
-
-    allocate (dictionary(n, size(self%dimension_specifier)), stat=istat)
-    if (istat /= 0) then
-      write (errormsg, "(i20)") istat
-      errormsg = "MAC: Error #3: failure allocating permutation dictionary. stat = "//trim(adjustl(errormsg))//"."
-      error stop trim(errormsg)
-    endif
-
-    dictionary = 1
-
-    do i = 1, n
-
-      associate (array_layout=>dictionary(i, :))
-        select case (self%layout)
-        case (0)
-          reduction = i
-          do counter = 1, size(variables) - 1
-            array_layout(variables(counter)) = modulo(reduction, self%dimension_specifier(variables(counter)))
-            if (array_layout(variables(counter)) == 0) &
-              array_layout(variables(counter)) = self%dimension_specifier(variables(counter))
-            reduction = int((reduction - array_layout(variables(counter)))/self%dimension_specifier(variables(counter))) + 1
-          enddo
-          array_layout(variables(counter)) = reduction
-        case (1)
-          reduction = i
-          do counter = size(variables), 2, -1
-            array_layout(variables(counter)) = modulo(reduction, self%dimension_specifier(variables(counter)))
-            if (array_layout(variables(counter)) == 0) &
-              array_layout(variables(counter)) = self%dimension_specifier(variables(counter))
-            reduction = int((reduction - array_layout(variables(counter)))/self%dimension_specifier(variables(counter))) + 1
-          enddo
-          array_layout(variables(1)) = reduction
-        end select
-        array_layout = array_layout + self%lower_bounds - 1
-      end associate
-
-    enddo
-
-  end subroutine
 
   subroutine specify(self, dimension_specifier, lower_bounds, layout)
     class(container_specifier), intent(out) :: self
@@ -188,9 +128,9 @@ contains
     if (present(layout)) then
       select case (layout)
       case ("column-major", "F", "col", "left")
-        self%layout = 0
+        self%lyt = 0
       case ("row-major", "C", "row", "right")
-        self%layout = 1
+        self%lyt = 1
       case default
         error stop "MAC: Error #5: specified layout not recognized."
       end select
@@ -209,7 +149,7 @@ contains
     array_layout = self%lower_bounds - 1
     if ((memory_layout < 1) .or. (memory_layout > product(self%dimension_specifier))) return
     array_layout = 0
-    select case (self%layout)
+    select case (self%lyt)
     case (0)
       reduction = memory_layout
       do counter = 1, size(self%dimension_specifier) - 1
@@ -240,7 +180,7 @@ contains
       if ((array_layout(counter) < self%lower_bounds(counter)) .or. &
           (array_layout(counter) > self%dimension_specifier(counter) + self%lower_bounds(counter) - 1)) return
     enddo
-    select case (self%layout)
+    select case (self%lyt)
     case (0)
       memory_layout = 1
       do counter = size(self%dimension_specifier), 1, -1
@@ -262,39 +202,108 @@ contains
     get_size = product(self%dimension_specifier)
   end function get_size
 
-  pure elemental subroutine get_integer_property(self, property, val)
+  pure elemental integer function get_rank(self)
     class(container_specifier), intent(in) :: self
-    character(len=*), intent(in) :: property
-    integer, intent(out) :: val
     if (.not. self%specifier_initialized) error stop "MAC: Error #6: container specifier not initalized."
-    select case (property)
-    case ("size")
-      val = product(self%dimension_specifier)
-    case ("layout")
-      val = self%layout
-    case ("dimension", "rank")
-      val = size(self%dimension_specifier)
-    case default
-      error stop "MAC: Error #7: requested property not recognized."
-    end select
-  end subroutine get_integer_property
+    get_rank = size(self%dimension_specifier)
+  end function get_rank
 
-  pure subroutine get_integer_array_property(self, property, val)
+  pure function get_shape(self)
     class(container_specifier), intent(in) :: self
-    character(len=*), intent(in) :: property
-    integer, intent(out) :: val(size(self%dimension_specifier))
+    integer :: get_shape(size(self%dimension_specifier))
     if (.not. self%specifier_initialized) error stop "MAC: Error #6: container specifier not initalized."
-    select case (property)
-    case ("shape", "dimension_specifier")
-      val = self%dimension_specifier
-    case ("lower_bounds", "lb", "l_bounds")
-      val = self%lower_bounds
-    case ("upper_bounds", "ub", "u_bounds")
-      val = self%lower_bounds + self%dimension_specifier - 1
-    case default
-      error stop "MAC: Error #7: requested property not recognized."
-    end select
-  end subroutine get_integer_array_property
+    get_shape = self%dimension_specifier
+  end function get_shape
+
+  pure function get_lbounds(self)
+    class(container_specifier), intent(in) :: self
+    integer :: get_lbounds(size(self%dimension_specifier))
+    if (.not. self%specifier_initialized) error stop "MAC: Error #6: container specifier not initalized."
+    get_lbounds = self%lower_bounds
+  end function get_lbounds
+
+  pure function get_ubounds(self)
+    class(container_specifier), intent(in) :: self
+    integer :: get_ubounds(size(self%dimension_specifier))
+    if (.not. self%specifier_initialized) error stop "MAC: Error #6: container specifier not initalized."
+    get_ubounds = self%lower_bounds + self%dimension_specifier - 1
+  end function get_ubounds
+
+  pure elemental integer function get_layout(self)
+    class(container_specifier), intent(in) :: self
+    if (.not. self%specifier_initialized) error stop "MAC: Error #6: container specifier not initalized."
+    get_layout = self%lyt
+  end function get_layout
+
+  pure elemental logical function get_is_specifier_initailized(self)
+    class(container_specifier), intent(in) :: self
+    get_is_specifier_initailized = self%specifier_initialized
+  end function get_is_specifier_initailized
+
+  pure function partial_permutation(self, dims) result(dictionary)
+    class(container_specifier), intent(in) :: self
+    integer, intent(in) :: dims(:)
+    integer, allocatable :: dictionary(:, :)
+
+    character(len=1024) :: errormsg
+    integer :: istat, i, n
+    integer :: counter, reduction
+
+    if (.not. self%specifier_initialized) error stop "MAC: Error #6: container specifier not initalized."
+    if (size(dims) > size(self%dimension_specifier)) error stop "MAC: Error #12: size of dims array is larger than rank."
+    if (size(dims) == 0) error stop "MAC: Error #7: size of dims must be greater than 0."
+
+    do i = 1, size(dims)
+      if ((dims(i) < 1) .or. (dims(i) > size(self%dimension_specifier))) then
+        write (errormsg, "(i20)") i
+        errormsg = "MAC: Error #14: dims("//trim(adjustl(errormsg))//") does not reference a valid dimension label."
+        error stop trim(errormsg)
+      endif
+    enddo
+
+    n = 1
+    do i = 1, size(dims)
+      n = n*self%dimension_specifier(dims(i))
+    enddo
+
+    allocate (dictionary(n, size(self%dimension_specifier)), stat=istat)
+    if (istat /= 0) then
+      write (errormsg, "(i20)") istat
+      errormsg = "MAC: Error #3: failure allocating permutation dictionary. stat = "//trim(adjustl(errormsg))//"."
+      error stop trim(errormsg)
+    endif
+
+    dictionary = 1
+
+    do i = 1, n
+
+      associate (array_layout=>dictionary(i, :))
+        select case (self%lyt)
+        case (0)
+          reduction = i
+          do counter = 1, size(dims) - 1
+            array_layout(dims(counter)) = modulo(reduction, self%dimension_specifier(dims(counter)))
+            if (array_layout(dims(counter)) == 0) &
+              array_layout(dims(counter)) = self%dimension_specifier(dims(counter))
+            reduction = int((reduction - array_layout(dims(counter)))/self%dimension_specifier(dims(counter))) + 1
+          enddo
+          array_layout(dims(counter)) = reduction
+        case (1)
+          reduction = i
+          do counter = size(dims), 2, -1
+            array_layout(dims(counter)) = modulo(reduction, self%dimension_specifier(dims(counter)))
+            if (array_layout(dims(counter)) == 0) &
+              array_layout(dims(counter)) = self%dimension_specifier(dims(counter))
+            reduction = int((reduction - array_layout(dims(counter)))/self%dimension_specifier(dims(counter))) + 1
+          enddo
+          array_layout(dims(1)) = reduction
+        end select
+        array_layout = array_layout + self%lower_bounds - 1
+      end associate
+
+    enddo
+
+  end function partial_permutation
 
   subroutine construct(self, container_type, dimension_specifier, lower_bounds, layout)
     class(container), intent(out) :: self
@@ -361,9 +370,9 @@ contains
     if (present(layout)) then
       select case (layout)
       case ("column-major", "F", "col", "left")
-        self%layout = 0
+        self%lyt = 0
       case ("row-major", "C", "row", "right")
-        self%layout = 1
+        self%lyt = 1
       case default
         error stop "MAC: Error #5: specified layout not recognized."
       end select
@@ -434,9 +443,21 @@ contains
 
   end subroutine construct
 
-  pure subroutine set_al(self, value, at)
+  pure elemental integer function get_container_type(self)
+    class(container), intent(in) :: self
+    if (.not. (self%container_initialized)) error stop &
+      "MAC: Error #6: container not initialized."
+    get_container_type = self%container_type
+  end function get_container_type
+
+  pure elemental logical function get_is_container_initailized(self)
+    class(container), intent(in) :: self
+    get_is_container_initailized = self%container_initialized
+  end function get_is_container_initailized
+
+  pure subroutine set_al(self, val, at)
     class(container), intent(inout) :: self
-    logical, intent(in) :: value
+    logical, intent(in) :: val
     integer, intent(in) :: at(size(self%dimension_specifier))
     integer :: memory_layout
     if (.not. (self%container_initialized)) error stop &
@@ -448,12 +469,12 @@ contains
       "MAC: Error #9: specified array layout adress is out of bounds."
     if (.not. allocated(self%l_storage)) error stop &
       "MAC: Error #10: the logical container is not allocated."
-    self%l_storage(memory_layout) = value
+    self%l_storage(memory_layout) = val
   end subroutine set_al
 
-  pure subroutine set_ml(self, value, at)
+  pure subroutine set_ml(self, val, at)
     class(container), intent(inout) :: self
-    logical, intent(in) :: value
+    logical, intent(in) :: val
     integer, intent(in) :: at
     if (.not. (self%container_initialized)) error stop &
       "MAC: Error #6: container not initialized."
@@ -463,24 +484,24 @@ contains
       "MAC: Error #9: specified memory layout adress is out of bounds."
     if (.not. allocated(self%l_storage)) error stop &
       "MAC: Error #10: the logical container is not allocated."
-    self%l_storage(at) = value
+    self%l_storage(at) = val
   end subroutine set_ml
 
-  pure subroutine set_gl(self, value)
+  pure subroutine set_gl(self, val)
     class(container), intent(inout) :: self
-    logical, intent(in) :: value
+    logical, intent(in) :: val
     if (.not. (self%container_initialized)) error stop &
       "MAC: Error #6: container not initialized."
     if (self%container_type /= 1) error stop &
       "MAC: Error #8: trying to set logical value to non logical container."
     if (.not. allocated(self%l_storage)) error stop &
       "MAC: Error #10: the logical container is not allocated."
-    self%l_storage = value
+    self%l_storage = val
   end subroutine set_gl
 
-  pure subroutine get_al(self, value, at)
+  pure subroutine get_al(self, val, at)
     class(container), intent(inout) :: self
-    logical, intent(out) :: value
+    logical, intent(out) :: val
     integer, intent(in) :: at(size(self%dimension_specifier))
     integer :: memory_layout
     if (.not. (self%container_initialized)) error stop &
@@ -492,12 +513,12 @@ contains
       "MAC: Error #9: specified array layout adress is out of bounds."
     if (.not. allocated(self%l_storage)) error stop &
       "MAC: Error #10: the logical container is not allocated."
-    value = self%l_storage(memory_layout)
+    val = self%l_storage(memory_layout)
   end subroutine get_al
 
-  pure subroutine get_ml(self, value, at)
+  pure subroutine get_ml(self, val, at)
     class(container), intent(inout) :: self
-    logical, intent(out) :: value
+    logical, intent(out) :: val
     integer, intent(in) :: at
     if (.not. (self%container_initialized)) error stop &
       "MAC: Error #6: container not initialized."
@@ -507,12 +528,12 @@ contains
       "MAC: Error #9: specified memory layout adress is out of bounds."
     if (.not. allocated(self%l_storage)) error stop &
       "MAC: Error #10: the logical container is not allocated."
-    value = self%l_storage(at)
+    val = self%l_storage(at)
   end subroutine get_ml
 
-  pure subroutine set_ai(self, value, at)
+  pure subroutine set_ai(self, val, at)
     class(container), intent(inout) :: self
-    integer, intent(in) :: value
+    integer, intent(in) :: val
     integer, intent(in) :: at(size(self%dimension_specifier))
     integer :: memory_layout
     if (.not. (self%container_initialized)) error stop &
@@ -524,12 +545,12 @@ contains
       "MAC: Error #9: specified array layout adress is out of bounds."
     if (.not. allocated(self%i_storage)) error stop &
       "MAC: Error #10: the integer container is not allocated."
-    self%i_storage(memory_layout) = value
+    self%i_storage(memory_layout) = val
   end subroutine set_ai
 
-  pure subroutine set_mi(self, value, at)
+  pure subroutine set_mi(self, val, at)
     class(container), intent(inout) :: self
-    integer, intent(in) :: value
+    integer, intent(in) :: val
     integer, intent(in) :: at
     if (.not. (self%container_initialized)) error stop &
       "MAC: Error #6: container not initialized."
@@ -539,24 +560,24 @@ contains
       "MAC: Error #9: specified memory layout adress is out of bounds."
     if (.not. allocated(self%i_storage)) error stop &
       "MAC: Error #10: the integer container is not allocated."
-    self%i_storage(at) = value
+    self%i_storage(at) = val
   end subroutine set_mi
 
-  pure subroutine set_gi(self, value)
+  pure subroutine set_gi(self, val)
     class(container), intent(inout) :: self
-    integer, intent(in) :: value
+    integer, intent(in) :: val
     if (.not. (self%container_initialized)) error stop &
       "MAC: Error #6: container not initialized."
     if (self%container_type /= 2) error stop &
       "MAC: Error #8: trying to set integer value to non integer container."
     if (.not. allocated(self%i_storage)) error stop &
       "MAC: Error #10: the integer container is not allocated."
-    self%i_storage = value
+    self%i_storage = val
   end subroutine set_gi
 
-  pure subroutine get_ai(self, value, at)
+  pure subroutine get_ai(self, val, at)
     class(container), intent(inout) :: self
-    integer, intent(out) :: value
+    integer, intent(out) :: val
     integer, intent(in) :: at(size(self%dimension_specifier))
     integer :: memory_layout
     if (.not. (self%container_initialized)) error stop &
@@ -568,12 +589,12 @@ contains
       "MAC: Error #9: specified array layout adress is out of bounds."
     if (.not. allocated(self%i_storage)) error stop &
       "MAC: Error #10: the integer container is not allocated."
-    value = self%i_storage(memory_layout)
+    val = self%i_storage(memory_layout)
   end subroutine get_ai
 
-  pure subroutine get_mi(self, value, at)
+  pure subroutine get_mi(self, val, at)
     class(container), intent(inout) :: self
-    integer, intent(out) :: value
+    integer, intent(out) :: val
     integer, intent(in) :: at
     if (.not. (self%container_initialized)) error stop &
       "MAC: Error #6: container not initialized."
@@ -583,12 +604,12 @@ contains
       "MAC: Error #9: specified memory layout adress is out of bounds."
     if (.not. allocated(self%i_storage)) error stop &
       "MAC: Error #10: the integer container is not allocated."
-    value = self%i_storage(at)
+    val = self%i_storage(at)
   end subroutine get_mi
 
-  pure subroutine set_ar(self, value, at)
+  pure subroutine set_ar(self, val, at)
     class(container), intent(inout) :: self
-    real, intent(in) :: value
+    real, intent(in) :: val
     integer, intent(in) :: at(size(self%dimension_specifier))
     integer :: memory_layout
     if (.not. (self%container_initialized)) error stop &
@@ -600,12 +621,12 @@ contains
       "MAC: Error #9: specified array layout adress is out of bounds."
     if (.not. allocated(self%r_storage)) error stop &
       "MAC: Error #10: the real container is not allocated."
-    self%r_storage(memory_layout) = value
+    self%r_storage(memory_layout) = val
   end subroutine set_ar
 
-  pure subroutine set_mr(self, value, at)
+  pure subroutine set_mr(self, val, at)
     class(container), intent(inout) :: self
-    real, intent(in) :: value
+    real, intent(in) :: val
     integer, intent(in) :: at
     if (.not. (self%container_initialized)) error stop &
       "MAC: Error #6: container not initialized."
@@ -615,24 +636,24 @@ contains
       "MAC: Error #9: specified memory layout adress is out of bounds."
     if (.not. allocated(self%r_storage)) error stop &
       "MAC: Error #10: the real container is not allocated."
-    self%r_storage(at) = value
+    self%r_storage(at) = val
   end subroutine set_mr
 
-  pure subroutine set_gr(self, value)
+  pure subroutine set_gr(self, val)
     class(container), intent(inout) :: self
-    real, intent(in) :: value
+    real, intent(in) :: val
     if (.not. (self%container_initialized)) error stop &
       "MAC: Error #6: container not initialized."
     if (self%container_type /= 3) error stop &
       "MAC: Error #8: trying to set real value to non real container."
     if (.not. allocated(self%r_storage)) error stop &
       "MAC: Error #10: the real container is not allocated."
-    self%r_storage = value
+    self%r_storage = val
   end subroutine set_gr
 
-  pure subroutine get_ar(self, value, at)
+  pure subroutine get_ar(self, val, at)
     class(container), intent(inout) :: self
-    real, intent(out) :: value
+    real, intent(out) :: val
     integer, intent(in) :: at(size(self%dimension_specifier))
     integer :: memory_layout
     if (.not. (self%container_initialized)) error stop &
@@ -644,12 +665,12 @@ contains
       "MAC: Error #9: specified array layout adress is out of bounds."
     if (.not. allocated(self%r_storage)) error stop &
       "MAC: Error #10: the real container is not allocated."
-    value = self%r_storage(memory_layout)
+    val = self%r_storage(memory_layout)
   end subroutine get_ar
 
-  pure subroutine get_mr(self, value, at)
+  pure subroutine get_mr(self, val, at)
     class(container), intent(inout) :: self
-    real, intent(out) :: value
+    real, intent(out) :: val
     integer, intent(in) :: at
     if (.not. (self%container_initialized)) error stop &
       "MAC: Error #6: container not initialized."
@@ -659,12 +680,12 @@ contains
       "MAC: Error #9: specified memory layout adress is out of bounds."
     if (.not. allocated(self%r_storage)) error stop &
       "MAC: Error #10: the real container is not allocated."
-    value = self%r_storage(at)
+    val = self%r_storage(at)
   end subroutine get_mr
 
-  pure subroutine set_ac(self, value, at)
+  pure subroutine set_ac(self, val, at)
     class(container), intent(inout) :: self
-    complex, intent(in) :: value
+    complex, intent(in) :: val
     integer, intent(in) :: at(size(self%dimension_specifier))
     integer :: memory_layout
     if (.not. (self%container_initialized)) error stop &
@@ -676,12 +697,12 @@ contains
       "MAC: Error #9: specified array layout adress is out of bounds."
     if (.not. allocated(self%c_storage)) error stop &
       "MAC: Error #10: the complex container is not allocated."
-    self%c_storage(memory_layout) = value
+    self%c_storage(memory_layout) = val
   end subroutine set_ac
 
-  pure subroutine set_mc(self, value, at)
+  pure subroutine set_mc(self, val, at)
     class(container), intent(inout) :: self
-    complex, intent(in) :: value
+    complex, intent(in) :: val
     integer, intent(in) :: at
     if (.not. (self%container_initialized)) error stop &
       "MAC: Error #6: container not initialized."
@@ -691,24 +712,24 @@ contains
       "MAC: Error #9: specified memory layout adress is out of bounds."
     if (.not. allocated(self%c_storage)) error stop &
       "MAC: Error #10: the complex container is not allocated."
-    self%c_storage(at) = value
+    self%c_storage(at) = val
   end subroutine set_mc
 
-  pure subroutine set_gc(self, value)
+  pure subroutine set_gc(self, val)
     class(container), intent(inout) :: self
-    complex, intent(in) :: value
+    complex, intent(in) :: val
     if (.not. (self%container_initialized)) error stop &
       "MAC: Error #6: container not initialized."
     if (self%container_type /= 4) error stop &
       "MAC: Error #8: trying to set complex value to non complex container."
     if (.not. allocated(self%c_storage)) error stop &
       "MAC: Error #10: the complex container is not allocated."
-    self%c_storage = value
+    self%c_storage = val
   end subroutine set_gc
 
-  pure subroutine get_ac(self, value, at)
+  pure subroutine get_ac(self, val, at)
     class(container), intent(inout) :: self
-    complex, intent(out) :: value
+    complex, intent(out) :: val
     integer, intent(in) :: at(size(self%dimension_specifier))
     integer :: memory_layout
     if (.not. (self%container_initialized)) error stop &
@@ -720,12 +741,12 @@ contains
       "MAC: Error #9: specified array layout adress is out of bounds."
     if (.not. allocated(self%c_storage)) error stop &
       "MAC: Error #10: the complex container is not allocated."
-    value = self%c_storage(memory_layout)
+    val = self%c_storage(memory_layout)
   end subroutine get_ac
 
-  pure subroutine get_mc(self, value, at)
+  pure subroutine get_mc(self, val, at)
     class(container), intent(inout) :: self
-    complex, intent(out) :: value
+    complex, intent(out) :: val
     integer, intent(in) :: at
     if (.not. (self%container_initialized)) error stop &
       "MAC: Error #6: container not initialized."
@@ -735,12 +756,12 @@ contains
       "MAC: Error #9: specified memory layout adress is out of bounds."
     if (.not. allocated(self%c_storage)) error stop &
       "MAC: Error #10: the complex container is not allocated."
-    value = self%c_storage(at)
+    val = self%c_storage(at)
   end subroutine get_mc
 
-  pure subroutine set_ardp(self, value, at)
+  pure subroutine set_ardp(self, val, at)
     class(container), intent(inout) :: self
-    real(wp), intent(in) :: value
+    real(wp), intent(in) :: val
     integer, intent(in) :: at(size(self%dimension_specifier))
     integer :: memory_layout
     if (.not. (self%container_initialized)) error stop &
@@ -752,12 +773,12 @@ contains
       "MAC: Error #9: specified array layout adress is out of bounds."
     if (.not. allocated(self%rdp_storage)) error stop &
       "MAC: Error #10: the real(wp) container is not allocated."
-    self%rdp_storage(memory_layout) = value
+    self%rdp_storage(memory_layout) = val
   end subroutine set_ardp
 
-  pure subroutine set_mrdp(self, value, at)
+  pure subroutine set_mrdp(self, val, at)
     class(container), intent(inout) :: self
-    real(wp), intent(in) :: value
+    real(wp), intent(in) :: val
     integer, intent(in) :: at
     if (.not. (self%container_initialized)) error stop &
       "MAC: Error #6: container not initialized."
@@ -767,24 +788,24 @@ contains
       "MAC: Error #9: specified memory layout adress is out of bounds."
     if (.not. allocated(self%rdp_storage)) error stop &
       "MAC: Error #10: the real(wp) container is not allocated."
-    self%rdp_storage(at) = value
+    self%rdp_storage(at) = val
   end subroutine set_mrdp
 
-  pure subroutine set_grdp(self, value)
+  pure subroutine set_grdp(self, val)
     class(container), intent(inout) :: self
-    real(wp), intent(in) :: value
+    real(wp), intent(in) :: val
     if (.not. (self%container_initialized)) error stop &
       "MAC: Error #6: container not initialized."
     if (self%container_type /= 5) error stop &
       "MAC: Error #8: trying to set real(wp) value to non real(wp) container."
     if (.not. allocated(self%rdp_storage)) error stop &
       "MAC: Error #10: the real(wp) container is not allocated."
-    self%rdp_storage = value
+    self%rdp_storage = val
   end subroutine set_grdp
 
-  pure subroutine get_ardp(self, value, at)
+  pure subroutine get_ardp(self, val, at)
     class(container), intent(inout) :: self
-    real(wp), intent(out) :: value
+    real(wp), intent(out) :: val
     integer, intent(in) :: at(size(self%dimension_specifier))
     integer :: memory_layout
     if (.not. (self%container_initialized)) error stop &
@@ -796,12 +817,12 @@ contains
       "MAC: Error #9: specified array layout adress is out of bounds."
     if (.not. allocated(self%rdp_storage)) error stop &
       "MAC: Error #10: the real(wp) container is not allocated."
-    value = self%rdp_storage(memory_layout)
+    val = self%rdp_storage(memory_layout)
   end subroutine get_ardp
 
-  pure subroutine get_mrdp(self, value, at)
+  pure subroutine get_mrdp(self, val, at)
     class(container), intent(inout) :: self
-    real(wp), intent(out) :: value
+    real(wp), intent(out) :: val
     integer, intent(in) :: at
     if (.not. (self%container_initialized)) error stop &
       "MAC: Error #6: container not initialized."
@@ -811,12 +832,12 @@ contains
       "MAC: Error #9: specified memory layout adress is out of bounds."
     if (.not. allocated(self%rdp_storage)) error stop &
       "MAC: Error #10: the real(wp) container is not allocated."
-    value = self%rdp_storage(at)
+    val = self%rdp_storage(at)
   end subroutine get_mrdp
 
-  pure subroutine set_acdp(self, value, at)
+  pure subroutine set_acdp(self, val, at)
     class(container), intent(inout) :: self
-    complex(wp), intent(in) :: value
+    complex(wp), intent(in) :: val
     integer, intent(in) :: at(size(self%dimension_specifier))
     integer :: memory_layout
     if (.not. (self%container_initialized)) error stop &
@@ -828,12 +849,12 @@ contains
       "MAC: Error #9: specified array layout adress is out of bounds."
     if (.not. allocated(self%cdp_storage)) error stop &
       "MAC: Error #10: the complex(wp) container is not allocated."
-    self%cdp_storage(memory_layout) = value
+    self%cdp_storage(memory_layout) = val
   end subroutine set_acdp
 
-  pure subroutine set_mcdp(self, value, at)
+  pure subroutine set_mcdp(self, val, at)
     class(container), intent(inout) :: self
-    complex(wp), intent(in) :: value
+    complex(wp), intent(in) :: val
     integer, intent(in) :: at
     if (.not. (self%container_initialized)) error stop &
       "MAC: Error #6: container not initialized."
@@ -843,24 +864,24 @@ contains
       "MAC: Error #9: specified memory layout adress is out of bounds."
     if (.not. allocated(self%cdp_storage)) error stop &
       "MAC: Error #10: the complex(wp) container is not allocated."
-    self%cdp_storage(at) = value
+    self%cdp_storage(at) = val
   end subroutine set_mcdp
 
-  pure subroutine set_gcdp(self, value)
+  pure subroutine set_gcdp(self, val)
     class(container), intent(inout) :: self
-    complex(wp), intent(in) :: value
+    complex(wp), intent(in) :: val
     if (.not. (self%container_initialized)) error stop &
       "MAC: Error #6: container not initialized."
     if (self%container_type /= 6) error stop &
       "MAC: Error #8: trying to set complex(wp) value to non complex(wp) container."
     if (.not. allocated(self%cdp_storage)) error stop &
       "MAC: Error #10: the complex(wp) container is not allocated."
-    self%cdp_storage = value
+    self%cdp_storage = val
   end subroutine set_gcdp
 
-  pure subroutine get_acdp(self, value, at)
+  pure subroutine get_acdp(self, val, at)
     class(container), intent(inout) :: self
-    complex(wp), intent(out) :: value
+    complex(wp), intent(out) :: val
     integer, intent(in) :: at(size(self%dimension_specifier))
     integer :: memory_layout
     if (.not. (self%container_initialized)) error stop &
@@ -872,12 +893,12 @@ contains
       "MAC: Error #9: specified array layout adress is out of bounds."
     if (.not. allocated(self%cdp_storage)) error stop &
       "MAC: Error #10: the complex(wp) container is not allocated."
-    value = self%cdp_storage(memory_layout)
+    val = self%cdp_storage(memory_layout)
   end subroutine get_acdp
 
-  pure subroutine get_mcdp(self, value, at)
+  pure subroutine get_mcdp(self, val, at)
     class(container), intent(inout) :: self
-    complex(wp), intent(out) :: value
+    complex(wp), intent(out) :: val
     integer, intent(in) :: at
     if (.not. (self%container_initialized)) error stop &
       "MAC: Error #6: container not initialized."
@@ -887,7 +908,7 @@ contains
       "MAC: Error #9: specified memory layout adress is out of bounds."
     if (.not. allocated(self%cdp_storage)) error stop &
       "MAC: Error #10: the complex(wp) container is not allocated."
-    value = self%cdp_storage(at)
+    val = self%cdp_storage(at)
   end subroutine get_mcdp
 
 end module MAC

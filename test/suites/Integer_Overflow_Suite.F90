@@ -18,7 +18,6 @@ contains
 
   subroutine test_integer_overflow_does_not_happen(error)
     type(error_type), allocatable, intent(out) :: error
-    type(container_specifier) :: a
     integer :: i
     call execute_command_line("fpm run Integer_Overflow_Does_Not_Happen > out.log 2>&1", wait=.true., exitstat=i)
     if (i == 1) allocate (error)

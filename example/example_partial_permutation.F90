@@ -20,7 +20,7 @@ program example_partial_permutation
   !The permutations are: (1, 1, 1), (2, 1, 1), (1, 2, 1)...
   dict = a%partial_permutation(dims=[1, 2])
   do i = 1, size(dict(:, 1))
-    write (unit=output_unit, fmt=*), "Perm = ", i, ". Arr = ", dict(i, :), ", Mem = ", a%ind(dict(i, :)), "."
+    write (unit=output_unit, fmt=*) "Perm = ", i, ". Arr = ", dict(i, :), ", Mem = ", a%ind(dict(i, :)), "."
   enddo
   !so dimension #3 is not permuted over.
 
@@ -29,7 +29,7 @@ program example_partial_permutation
   !permuted first. For example,
   dict = a%partial_permutation(dims=[2, 1])
   do i = 1, size(dict(:, 1))
-    write (unit=output_unit, fmt=*), "Perm = ", i, ". Arr = ", dict(i, :), ", Mem = ", a%ind(dict(i, :)), "."
+    write (unit=output_unit, fmt=*) "Perm = ", i, ". Arr = ", dict(i, :), ", Mem = ", a%ind(dict(i, :)), "."
   enddo
   !permutes first dimension label #2 and then dimension label #1.
 

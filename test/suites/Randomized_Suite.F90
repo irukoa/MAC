@@ -27,7 +27,6 @@ contains
       integer, allocatable :: spec(:), lbs(:)
       character(len=1) :: lyt
 
-      call random_init(.true., .true.)
       call random_seed()
       call random_number(random)
       dim = nint(1.0_wp + real(maxdim - 1, wp)*random)

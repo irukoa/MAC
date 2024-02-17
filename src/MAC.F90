@@ -13,6 +13,8 @@ module MAC
     logical :: specifier_initialized = .false.
   contains
     private
+    procedure, pass(self) :: spec_copy
+    generic, public :: assignment(=) => spec_copy
     procedure, pass(self) :: specify_char
     procedure, pass(self) :: specify_int
     generic, public :: specify => specify_char, specify_int
@@ -41,6 +43,8 @@ module MAC
     complex(wp), allocatable, public :: cdp_storage(:)
   contains
     private
+    procedure, pass(self) :: cont_copy
+    generic, public :: assignment(=) => cont_copy
     procedure, pass(self) :: construct_ctc_lc, construct_cti_lc, &
       construct_ctc_li, construct_cti_li
     generic, public :: construct => construct_ctc_lc, construct_cti_lc, &
@@ -72,6 +76,13 @@ module MAC
   end type
 
 contains
+
+  subroutine spec_copy(self, from)
+    class(container_specifier), intent(out) :: self
+    type(container_specifier), intent(in) :: from
+    if (.not. from%spec_init()) error stop "MAC: Error #6: container specifier not initalized."
+    call self%specify(from%shape(), from%lbounds(), from%layout())
+  end subroutine spec_copy
 
   subroutine specify_char(self, dimension_specifier, lower_bounds, layout)
     class(container_specifier), intent(out) :: self
@@ -387,6 +398,27 @@ contains
     enddo
 
   end function partial_permutation
+
+  subroutine cont_copy(self, from)
+    class(container), intent(out) :: self
+    class(container), intent(in) :: from
+    if (.not. from%cont_init()) error stop "MAC: Error #6: container not initalized."
+    call self%construct(from%cont_type(), from%shape(), from%lbounds(), from%layout())
+    select case (from%cont_type())
+    case (1)
+      self%l_storage = from%l_storage
+    case (2)
+      self%i_storage = from%i_storage
+    case (3)
+      self%r_storage = from%r_storage
+    case (4)
+      self%c_storage = from%c_storage
+    case (5)
+      self%rdp_storage = from%rdp_storage
+    case (6)
+      self%cdp_storage = from%cdp_storage
+    end select
+  end subroutine cont_copy
 
   subroutine construct_ctc_lc(self, container_type, dimension_specifier, lower_bounds, layout)
     class(container), intent(out) :: self

@@ -6,6 +6,7 @@ program driver
   use Integer_Overflow_Suite, only: Collect_Integer_Overflow_Tests
   use Expected_Behaviour_Suite, only: Collect_Expected_Behaviour_Tests
   use Randomized_Suite, only: Collect_Randomized_Tests
+  use Reduction_Suite, only: Collect_Reduction_Tests
 
   implicit none
   integer :: stat, is
@@ -17,7 +18,8 @@ program driver
 
   testsuites = [new_testsuite("Integer_Overflow", Collect_Integer_Overflow_Tests), &
                 new_testsuite("Expected Behaviour", Collect_Expected_Behaviour_Tests), &
-                new_testsuite("Randomized", Collect_Randomized_Tests)]
+                new_testsuite("Randomized", Collect_Randomized_Tests), &
+                new_testsuite("Reduction", Collect_Reduction_Tests)]
 
   call get_argument(1, suite_name)
   call get_argument(2, test_name)

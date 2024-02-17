@@ -30,6 +30,9 @@ contains
       call random_seed()
       call random_number(random)
       dim = nint(1.0_wp + real(maxdim - 1, wp)*random)
+
+      !dim = 4 !DBG
+
       allocate (spec(dim), lbs(dim))
       do i = 1, dim
         call random_number(random)
@@ -45,6 +48,11 @@ contains
       else
         lyt = "C"
       endif
+
+      !spec = [4, 3, 3, 3] !DBG
+      !lbs = [25, 53, -79, 63] !DBG
+      !lyt = "F" !DBG
+
       write (output_unit, fmt="(A)") "Layout = "//lyt//"."
       call r%construct(container_type="real_dp", &
                        dimension_specifier=spec, &

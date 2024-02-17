@@ -13,7 +13,11 @@ module MAC
     logical :: specifier_initialized = .false.
   contains
     private
-    procedure, public, pass(self) :: specify
+    procedure, pass(self) :: spec_copy
+    generic, public :: assignment(=) => spec_copy
+    procedure, pass(self) :: specify_char
+    procedure, pass(self) :: specify_int
+    generic, public :: specify => specify_char, specify_int
     procedure, pass(self) :: array_layout
     procedure, pass(self) :: memory_layout
     generic, public :: ind => memory_layout, array_layout
@@ -39,7 +43,12 @@ module MAC
     complex(wp), allocatable, public :: cdp_storage(:)
   contains
     private
-    procedure, public, pass(self) :: construct
+    procedure, pass(self) :: cont_copy
+    generic, public :: assignment(=) => cont_copy
+    procedure, pass(self) :: construct_ctc_lc, construct_cti_lc, &
+      construct_ctc_li, construct_cti_li
+    generic, public :: construct => construct_ctc_lc, construct_cti_lc, &
+      construct_ctc_li, construct_cti_li
     procedure, pass(self), public :: cont_type => get_container_type
     procedure, pass(self), public :: cont_init => get_is_container_initailized
     procedure, pass(self) :: set_al, set_ml, set_gl, get_al, get_ml
@@ -60,11 +69,22 @@ module MAC
       get_ac, get_mc, &
       get_ardp, get_mrdp, &
       get_acdp, get_mcdp
+    procedure, pass(self) :: rd_l, rd_i, rd_r, rd_c, rd_rdp, rd_cdp, &
+      ra_l, ra_i, ra_r, ra_c, ra_rdp, ra_cdp
+    generic, public :: reduce => rd_l, rd_i, rd_r, rd_c, rd_rdp, rd_cdp, &
+      ra_l, ra_i, ra_r, ra_c, ra_rdp, ra_cdp
   end type
 
 contains
 
-  subroutine specify(self, dimension_specifier, lower_bounds, layout)
+  subroutine spec_copy(self, from)
+    class(container_specifier), intent(out) :: self
+    type(container_specifier), intent(in) :: from
+    if (.not. from%spec_init()) error stop "MAC: Error #6: container specifier not initalized."
+    call self%specify(from%shape(), from%lbounds(), from%layout())
+  end subroutine spec_copy
+
+  subroutine specify_char(self, dimension_specifier, lower_bounds, layout)
     class(container_specifier), intent(out) :: self
     integer, intent(in) :: dimension_specifier(:)
     integer, intent(in), optional :: lower_bounds(:)
@@ -138,7 +158,81 @@ contains
 
     self%specifier_initialized = .true.
 
-  end subroutine specify
+  end subroutine specify_char
+
+  subroutine specify_int(self, dimension_specifier, lower_bounds, layout)
+    class(container_specifier), intent(out) :: self
+    integer, intent(in) :: dimension_specifier(:)
+    integer, intent(in), optional :: lower_bounds(:)
+    integer, intent(in) :: layout
+
+    character(len=1024) :: errormsg
+    integer :: istat, i
+
+    if (lbound(dimension_specifier, dim=1) /= 1) error stop &
+      "MAC: Error #11: the lower bound of dimension_specifier is not 1."
+
+    if (present(lower_bounds)) then
+      if (lbound(dimension_specifier, dim=1) /= 1) error stop &
+        "MAC: Error #11: the lower bound of lower_bounds is not 1."
+    endif
+
+    if (present(lower_bounds)) then
+      if (size(dimension_specifier) /= size(lower_bounds)) &
+        error stop "MAC: Error #1: arrays dimension_specifier and lower_bounds are different sizes."
+    endif
+
+    do i = 1, size(dimension_specifier)
+      if (dimension_specifier(i) < 1) then
+        write (errormsg, "(i20)") i
+        errormsg = "MAC: Error #2: dimension_specifier("//trim(adjustl(errormsg))//") is lower than 1."
+        error stop trim(errormsg)
+      endif
+    enddo
+
+    allocate (self%dimension_specifier(size(dimension_specifier)), stat=istat)
+    if (istat /= 0) then
+      write (errormsg, "(i20)") istat
+      errormsg = "MAC: Error #3: failure allocating dimension_specifier. stat = "//trim(adjustl(errormsg))//"."
+      error stop trim(errormsg)
+    endif
+    self%dimension_specifier = dimension_specifier
+
+    safeguard_integer_overflow:block
+      real(wp) :: tst
+      integer :: i
+      tst = 1.0_wp
+      do i = 1, size(self%dimension_specifier)
+        tst = tst*real(self%dimension_specifier(i), wp)
+      enddo
+      if (abs(tst - real(product(self%dimension_specifier), wp)) > epsilon(1.0_wp)) &
+        error stop "MAC: Error #4: integer overflow. Requested array specifier too large."
+    end block safeguard_integer_overflow
+
+    allocate (self%lower_bounds(size(dimension_specifier)), stat=istat)
+    if (istat /= 0) then
+      write (errormsg, "(i20)") istat
+      errormsg = "MAC: Error #3: failure allocating lower_bounds. stat = "//trim(adjustl(errormsg))//"."
+      error stop trim(errormsg)
+    endif
+    if (present(lower_bounds)) then
+      self%lower_bounds = lower_bounds
+    else
+      self%lower_bounds = 1
+    endif
+
+    select case (layout)
+    case (0)
+      self%lyt = 0
+    case (1)
+      self%lyt = 1
+    case default
+      error stop "MAC: Error #5: specified layout not recognized."
+    end select
+
+    self%specifier_initialized = .true.
+
+  end subroutine specify_int
 
   pure function array_layout(self, memory_layout)
     class(container_specifier), intent(in) :: self
@@ -305,7 +399,28 @@ contains
 
   end function partial_permutation
 
-  subroutine construct(self, container_type, dimension_specifier, lower_bounds, layout)
+  subroutine cont_copy(self, from)
+    class(container), intent(out) :: self
+    class(container), intent(in) :: from
+    if (.not. from%cont_init()) error stop "MAC: Error #6: container not initalized."
+    call self%construct(from%cont_type(), from%shape(), from%lbounds(), from%layout())
+    select case (from%cont_type())
+    case (1)
+      self%l_storage = from%l_storage
+    case (2)
+      self%i_storage = from%i_storage
+    case (3)
+      self%r_storage = from%r_storage
+    case (4)
+      self%c_storage = from%c_storage
+    case (5)
+      self%rdp_storage = from%rdp_storage
+    case (6)
+      self%cdp_storage = from%cdp_storage
+    end select
+  end subroutine cont_copy
+
+  subroutine construct_ctc_lc(self, container_type, dimension_specifier, lower_bounds, layout)
     class(container), intent(out) :: self
     character(len=*), intent(in) :: container_type
     integer, intent(in) :: dimension_specifier(:)
@@ -441,7 +556,417 @@ contains
 
     self%container_initialized = .true.
 
-  end subroutine construct
+  end subroutine construct_ctc_lc
+
+  subroutine construct_cti_lc(self, container_type, dimension_specifier, lower_bounds, layout)
+    class(container), intent(out) :: self
+    integer, intent(in) :: container_type
+    integer, intent(in) :: dimension_specifier(:)
+    integer, intent(in), optional :: lower_bounds(:)
+    character(len=*), intent(in), optional :: layout
+
+    character(len=1024) :: errormsg
+    integer :: istat, i
+
+    if (lbound(dimension_specifier, dim=1) /= 1) error stop &
+      "MAC: Error #11: the lower bound of dimension_specifier is not 1."
+
+    if (present(lower_bounds)) then
+      if (lbound(dimension_specifier, dim=1) /= 1) error stop &
+        "MAC: Error #11: the lower bound of lower_bounds is not 1."
+    endif
+
+    if (present(lower_bounds)) then
+      if (size(dimension_specifier) /= size(lower_bounds)) &
+        error stop "MAC: Error #1: array dimension_specifier and lower_bounds are different sizes."
+    endif
+
+    do i = 1, size(dimension_specifier)
+      if (dimension_specifier(i) < 1) then
+        write (errormsg, "(i20)") i
+        errormsg = "MAC: Error #2: dimension_specifier("//trim(adjustl(errormsg))//") is lower than 1."
+        error stop trim(errormsg)
+      endif
+    enddo
+
+    allocate (self%dimension_specifier(size(dimension_specifier)), stat=istat)
+    if (istat /= 0) then
+      write (errormsg, "(i20)") istat
+      errormsg = "MAC: Error #3: failure allocating dimension_specifier. stat = "//trim(adjustl(errormsg))//"."
+      error stop trim(errormsg)
+    endif
+    self%dimension_specifier = dimension_specifier
+
+    safeguard_integer_overflow:block
+      real(wp) :: tst
+      integer :: i
+      tst = 1.0_wp
+      do i = 1, size(self%dimension_specifier)
+        tst = tst*real(self%dimension_specifier(i), wp)
+      enddo
+      if (abs(tst - real(product(self%dimension_specifier), wp)) > epsilon(1.0_wp)) &
+        error stop "MAC: Error #4: integer overflow. Requested array specifier too large."
+    end block safeguard_integer_overflow
+
+    allocate (self%lower_bounds(size(dimension_specifier)), stat=istat)
+    if (istat /= 0) then
+      write (errormsg, "(i20)") istat
+      errormsg = "MAC: Error #3: failure allocating lower_bounds. stat = "//trim(adjustl(errormsg))//"."
+      error stop trim(errormsg)
+    endif
+    if (present(lower_bounds)) then
+      self%lower_bounds = lower_bounds
+    else
+      self%lower_bounds = 1
+    endif
+
+    if (present(layout)) then
+      select case (layout)
+      case ("column-major", "F", "col", "left")
+        self%lyt = 0
+      case ("row-major", "C", "row", "right")
+        self%lyt = 1
+      case default
+        error stop "MAC: Error #5: specified layout not recognized."
+      end select
+    endif
+
+    self%specifier_initialized = .true.
+
+    select case (container_type)
+    case (1)
+      self%container_type = 1
+      allocate (self%l_storage(product(self%dimension_specifier)), stat=istat)
+      if (istat /= 0) then
+        write (errormsg, "(i20)") istat
+        errormsg = "MAC: Error #3: failure allocating storage for logical container. stat = "//trim(adjustl(errormsg))//"."
+        error stop trim(errormsg)
+      endif
+      self%l_storage = .false.
+    case (2)
+      self%container_type = 2
+      allocate (self%i_storage(product(self%dimension_specifier)), stat=istat)
+      if (istat /= 0) then
+        write (errormsg, "(i20)") istat
+        errormsg = "MAC: Error #3: failure allocating storage for integer container. stat = "//trim(adjustl(errormsg))//"."
+        error stop trim(errormsg)
+      endif
+      self%i_storage = 0
+    case (3)
+      self%container_type = 3
+      allocate (self%r_storage(product(self%dimension_specifier)), stat=istat)
+      if (istat /= 0) then
+        write (errormsg, "(i20)") istat
+        errormsg = "MAC: Error #3: failure allocating storage for real container. stat = "//trim(adjustl(errormsg))//"."
+        error stop trim(errormsg)
+      endif
+      self%r_storage = real(0.0)
+    case (4)
+      self%container_type = 4
+      allocate (self%c_storage(product(self%dimension_specifier)), stat=istat)
+      if (istat /= 0) then
+        write (errormsg, "(i20)") istat
+        errormsg = "MAC: Error #3: failure allocating storage for complex container. stat = "//trim(adjustl(errormsg))//"."
+        error stop trim(errormsg)
+      endif
+      self%c_storage = cmplx(0.0, 0.0)
+    case (5)
+      self%container_type = 5
+      allocate (self%rdp_storage(product(self%dimension_specifier)), stat=istat)
+      if (istat /= 0) then
+        write (errormsg, "(i20)") istat
+        errormsg = "MAC: Error #3: failure allocating storage for real container. stat = "//trim(adjustl(errormsg))//"."
+        error stop trim(errormsg)
+      endif
+      self%rdp_storage = real(0.0, wp)
+    case (6)
+      self%container_type = 6
+      allocate (self%cdp_storage(product(self%dimension_specifier)), stat=istat)
+      if (istat /= 0) then
+        write (errormsg, "(i20)") istat
+        errormsg = "MAC: Error #3: failure allocating storage for complex container. stat = "//trim(adjustl(errormsg))//"."
+        error stop trim(errormsg)
+      endif
+      self%cdp_storage = cmplx(0.0, 0.0, wp)
+    case default
+      error stop "MAC: Error #5: requested container type not recognized."
+    end select
+
+    self%container_initialized = .true.
+
+  end subroutine construct_cti_lc
+
+  subroutine construct_ctc_li(self, container_type, dimension_specifier, lower_bounds, layout)
+    class(container), intent(out) :: self
+    character(len=*), intent(in) :: container_type
+    integer, intent(in) :: dimension_specifier(:)
+    integer, intent(in), optional :: lower_bounds(:)
+    integer, intent(in) :: layout
+
+    character(len=1024) :: errormsg
+    integer :: istat, i
+
+    if (lbound(dimension_specifier, dim=1) /= 1) error stop &
+      "MAC: Error #11: the lower bound of dimension_specifier is not 1."
+
+    if (present(lower_bounds)) then
+      if (lbound(dimension_specifier, dim=1) /= 1) error stop &
+        "MAC: Error #11: the lower bound of lower_bounds is not 1."
+    endif
+
+    if (present(lower_bounds)) then
+      if (size(dimension_specifier) /= size(lower_bounds)) &
+        error stop "MAC: Error #1: array dimension_specifier and lower_bounds are different sizes."
+    endif
+
+    do i = 1, size(dimension_specifier)
+      if (dimension_specifier(i) < 1) then
+        write (errormsg, "(i20)") i
+        errormsg = "MAC: Error #2: dimension_specifier("//trim(adjustl(errormsg))//") is lower than 1."
+        error stop trim(errormsg)
+      endif
+    enddo
+
+    allocate (self%dimension_specifier(size(dimension_specifier)), stat=istat)
+    if (istat /= 0) then
+      write (errormsg, "(i20)") istat
+      errormsg = "MAC: Error #3: failure allocating dimension_specifier. stat = "//trim(adjustl(errormsg))//"."
+      error stop trim(errormsg)
+    endif
+    self%dimension_specifier = dimension_specifier
+
+    safeguard_integer_overflow:block
+      real(wp) :: tst
+      integer :: i
+      tst = 1.0_wp
+      do i = 1, size(self%dimension_specifier)
+        tst = tst*real(self%dimension_specifier(i), wp)
+      enddo
+      if (abs(tst - real(product(self%dimension_specifier), wp)) > epsilon(1.0_wp)) &
+        error stop "MAC: Error #4: integer overflow. Requested array specifier too large."
+    end block safeguard_integer_overflow
+
+    allocate (self%lower_bounds(size(dimension_specifier)), stat=istat)
+    if (istat /= 0) then
+      write (errormsg, "(i20)") istat
+      errormsg = "MAC: Error #3: failure allocating lower_bounds. stat = "//trim(adjustl(errormsg))//"."
+      error stop trim(errormsg)
+    endif
+    if (present(lower_bounds)) then
+      self%lower_bounds = lower_bounds
+    else
+      self%lower_bounds = 1
+    endif
+
+    select case (layout)
+    case (0)
+      self%lyt = 0
+    case (1)
+      self%lyt = 1
+    case default
+      error stop "MAC: Error #5: specified layout not recognized."
+    end select
+
+    self%specifier_initialized = .true.
+
+    select case (container_type)
+    case ("logical")
+      self%container_type = 1
+      allocate (self%l_storage(product(self%dimension_specifier)), stat=istat)
+      if (istat /= 0) then
+        write (errormsg, "(i20)") istat
+        errormsg = "MAC: Error #3: failure allocating storage for logical container. stat = "//trim(adjustl(errormsg))//"."
+        error stop trim(errormsg)
+      endif
+      self%l_storage = .false.
+    case ("integer")
+      self%container_type = 2
+      allocate (self%i_storage(product(self%dimension_specifier)), stat=istat)
+      if (istat /= 0) then
+        write (errormsg, "(i20)") istat
+        errormsg = "MAC: Error #3: failure allocating storage for integer container. stat = "//trim(adjustl(errormsg))//"."
+        error stop trim(errormsg)
+      endif
+      self%i_storage = 0
+    case ("real")
+      self%container_type = 3
+      allocate (self%r_storage(product(self%dimension_specifier)), stat=istat)
+      if (istat /= 0) then
+        write (errormsg, "(i20)") istat
+        errormsg = "MAC: Error #3: failure allocating storage for real container. stat = "//trim(adjustl(errormsg))//"."
+        error stop trim(errormsg)
+      endif
+      self%r_storage = real(0.0)
+    case ("complex")
+      self%container_type = 4
+      allocate (self%c_storage(product(self%dimension_specifier)), stat=istat)
+      if (istat /= 0) then
+        write (errormsg, "(i20)") istat
+        errormsg = "MAC: Error #3: failure allocating storage for complex container. stat = "//trim(adjustl(errormsg))//"."
+        error stop trim(errormsg)
+      endif
+      self%c_storage = cmplx(0.0, 0.0)
+    case ("real_dp")
+      self%container_type = 5
+      allocate (self%rdp_storage(product(self%dimension_specifier)), stat=istat)
+      if (istat /= 0) then
+        write (errormsg, "(i20)") istat
+        errormsg = "MAC: Error #3: failure allocating storage for real container. stat = "//trim(adjustl(errormsg))//"."
+        error stop trim(errormsg)
+      endif
+      self%rdp_storage = real(0.0, wp)
+    case ("complex_dp")
+      self%container_type = 6
+      allocate (self%cdp_storage(product(self%dimension_specifier)), stat=istat)
+      if (istat /= 0) then
+        write (errormsg, "(i20)") istat
+        errormsg = "MAC: Error #3: failure allocating storage for complex container. stat = "//trim(adjustl(errormsg))//"."
+        error stop trim(errormsg)
+      endif
+      self%cdp_storage = cmplx(0.0, 0.0, wp)
+    case default
+      error stop "MAC: Error #5: requested container type not recognized."
+    end select
+
+    self%container_initialized = .true.
+
+  end subroutine construct_ctc_li
+
+  subroutine construct_cti_li(self, container_type, dimension_specifier, lower_bounds, layout)
+    class(container), intent(out) :: self
+    integer, intent(in) :: container_type
+    integer, intent(in) :: dimension_specifier(:)
+    integer, intent(in), optional :: lower_bounds(:)
+    integer, intent(in) :: layout
+
+    character(len=1024) :: errormsg
+    integer :: istat, i
+
+    if (lbound(dimension_specifier, dim=1) /= 1) error stop &
+      "MAC: Error #11: the lower bound of dimension_specifier is not 1."
+
+    if (present(lower_bounds)) then
+      if (lbound(dimension_specifier, dim=1) /= 1) error stop &
+        "MAC: Error #11: the lower bound of lower_bounds is not 1."
+    endif
+
+    if (present(lower_bounds)) then
+      if (size(dimension_specifier) /= size(lower_bounds)) &
+        error stop "MAC: Error #1: array dimension_specifier and lower_bounds are different sizes."
+    endif
+
+    do i = 1, size(dimension_specifier)
+      if (dimension_specifier(i) < 1) then
+        write (errormsg, "(i20)") i
+        errormsg = "MAC: Error #2: dimension_specifier("//trim(adjustl(errormsg))//") is lower than 1."
+        error stop trim(errormsg)
+      endif
+    enddo
+
+    allocate (self%dimension_specifier(size(dimension_specifier)), stat=istat)
+    if (istat /= 0) then
+      write (errormsg, "(i20)") istat
+      errormsg = "MAC: Error #3: failure allocating dimension_specifier. stat = "//trim(adjustl(errormsg))//"."
+      error stop trim(errormsg)
+    endif
+    self%dimension_specifier = dimension_specifier
+
+    safeguard_integer_overflow:block
+      real(wp) :: tst
+      integer :: i
+      tst = 1.0_wp
+      do i = 1, size(self%dimension_specifier)
+        tst = tst*real(self%dimension_specifier(i), wp)
+      enddo
+      if (abs(tst - real(product(self%dimension_specifier), wp)) > epsilon(1.0_wp)) &
+        error stop "MAC: Error #4: integer overflow. Requested array specifier too large."
+    end block safeguard_integer_overflow
+
+    allocate (self%lower_bounds(size(dimension_specifier)), stat=istat)
+    if (istat /= 0) then
+      write (errormsg, "(i20)") istat
+      errormsg = "MAC: Error #3: failure allocating lower_bounds. stat = "//trim(adjustl(errormsg))//"."
+      error stop trim(errormsg)
+    endif
+    if (present(lower_bounds)) then
+      self%lower_bounds = lower_bounds
+    else
+      self%lower_bounds = 1
+    endif
+
+    select case (layout)
+    case (0)
+      self%lyt = 0
+    case (1)
+      self%lyt = 1
+    case default
+      error stop "MAC: Error #5: specified layout not recognized."
+    end select
+
+    self%specifier_initialized = .true.
+
+    select case (container_type)
+    case (1)
+      self%container_type = 1
+      allocate (self%l_storage(product(self%dimension_specifier)), stat=istat)
+      if (istat /= 0) then
+        write (errormsg, "(i20)") istat
+        errormsg = "MAC: Error #3: failure allocating storage for logical container. stat = "//trim(adjustl(errormsg))//"."
+        error stop trim(errormsg)
+      endif
+      self%l_storage = .false.
+    case (2)
+      self%container_type = 2
+      allocate (self%i_storage(product(self%dimension_specifier)), stat=istat)
+      if (istat /= 0) then
+        write (errormsg, "(i20)") istat
+        errormsg = "MAC: Error #3: failure allocating storage for integer container. stat = "//trim(adjustl(errormsg))//"."
+        error stop trim(errormsg)
+      endif
+      self%i_storage = 0
+    case (3)
+      self%container_type = 3
+      allocate (self%r_storage(product(self%dimension_specifier)), stat=istat)
+      if (istat /= 0) then
+        write (errormsg, "(i20)") istat
+        errormsg = "MAC: Error #3: failure allocating storage for real container. stat = "//trim(adjustl(errormsg))//"."
+        error stop trim(errormsg)
+      endif
+      self%r_storage = real(0.0)
+    case (4)
+      self%container_type = 4
+      allocate (self%c_storage(product(self%dimension_specifier)), stat=istat)
+      if (istat /= 0) then
+        write (errormsg, "(i20)") istat
+        errormsg = "MAC: Error #3: failure allocating storage for complex container. stat = "//trim(adjustl(errormsg))//"."
+        error stop trim(errormsg)
+      endif
+      self%c_storage = cmplx(0.0, 0.0)
+    case (5)
+      self%container_type = 5
+      allocate (self%rdp_storage(product(self%dimension_specifier)), stat=istat)
+      if (istat /= 0) then
+        write (errormsg, "(i20)") istat
+        errormsg = "MAC: Error #3: failure allocating storage for real container. stat = "//trim(adjustl(errormsg))//"."
+        error stop trim(errormsg)
+      endif
+      self%rdp_storage = real(0.0, wp)
+    case (6)
+      self%container_type = 6
+      allocate (self%cdp_storage(product(self%dimension_specifier)), stat=istat)
+      if (istat /= 0) then
+        write (errormsg, "(i20)") istat
+        errormsg = "MAC: Error #3: failure allocating storage for complex container. stat = "//trim(adjustl(errormsg))//"."
+        error stop trim(errormsg)
+      endif
+      self%cdp_storage = cmplx(0.0, 0.0, wp)
+    case default
+      error stop "MAC: Error #5: requested container type not recognized."
+    end select
+
+    self%container_initialized = .true.
+
+  end subroutine construct_cti_li
 
   pure elemental integer function get_container_type(self)
     class(container), intent(in) :: self
@@ -531,6 +1056,190 @@ contains
     val = self%l_storage(at)
   end subroutine get_ml
 
+  function rd_l(self, op, dim)
+
+    class(container), intent(inout) :: self
+    interface
+      function op(array)
+        import wp
+        logical, intent(in) :: array(:)
+        logical :: op
+      end function op
+    end interface
+    integer, intent(in) :: dim
+
+    type(container) :: rd_l
+
+    integer :: shp(self%rank()), lb(self%rank()), arr(self%rank()), &
+               outshp(self%rank() - 1), outlb(self%rank() - 1), outarr(self%rank() - 1), &
+               vars(self%rank() - 1)
+
+    integer, allocatable :: perm(:, :)
+
+    logical, allocatable :: tmp(:)
+    logical :: res
+
+    integer :: i, j
+    logical :: dim_passed
+
+    character(len=1024) :: errormsg
+    integer :: istat
+
+    if (.not. (self%container_initialized)) error stop &
+      "MAC: Error #6: container not initialized."
+
+    if ((dim > self%rank()) .or. (dim < 1)) error stop &
+      "MAC: Error #14: dim does not reference a valid dimension label."
+
+    shp = self%shape()
+    lb = self%lbounds()
+    dim_passed = .false.
+    do i = 1, self%rank() - 1
+      if (i == dim) dim_passed = .true.
+      if (dim_passed) then
+        outshp(i) = shp(i + 1)
+        outlb(i) = lb(i + 1)
+        vars(i) = i + 1
+      else
+        outshp(i) = shp(i)
+        outlb(i) = lb(i)
+        vars(i) = i
+      endif
+    enddo
+
+    perm = self%partial_permutation(vars)
+
+    allocate (tmp(shp(dim)), stat=istat)
+    if (istat /= 0) then
+      write (errormsg, "(i20)") istat
+      errormsg = "MAC: Error #3: failure allocating tmp. stat = "//trim(adjustl(errormsg))//"."
+      error stop trim(errormsg)
+    endif
+
+    call rd_l%construct(self%container_type, outshp, outlb, self%lyt)
+
+    do i = 1, size(perm(:, 1))
+      arr = perm(i, :)
+      dim_passed = .false.
+      do j = 1, self%rank() - 1
+        if (j == dim) dim_passed = .true.
+        if (dim_passed) then
+          outarr(j) = arr(j + 1)
+        else
+          outarr(j) = arr(j)
+        endif
+      enddo
+      do j = 1, shp(dim)
+        call self%get(val=tmp(j), at=arr)
+      enddo
+      res = op(tmp)
+      call rd_l%set(val=res, at=outarr)
+    enddo
+
+    deallocate (perm)
+
+  end function rd_l
+
+  function ra_l(self, op)
+
+    class(container), intent(inout) :: self
+    interface
+      function op(array)
+        import wp
+        logical, intent(in) :: array(:)
+        logical :: op
+      end function
+    end interface
+
+    logical :: ra_l
+
+    integer :: shp(self%rank()), sz
+
+    logical, allocatable :: tmp(:, :), hld(:), res(:)
+
+    integer :: dim, stride
+
+    character(len=1024) :: errormsg
+    integer :: istat
+
+    if (.not. (self%container_initialized)) error stop &
+      "MAC: Error #6: container not initialized."
+
+    shp = self%shape()
+    sz = self%size()
+
+    allocate (hld(sz), stat=istat)
+    if (istat /= 0) then
+      write (errormsg, "(i20)") istat
+      errormsg = "MAC: Error #3: failure allocating hld. stat = "//trim(adjustl(errormsg))//"."
+      error stop trim(errormsg)
+    endif
+
+    hld = self%l_storage
+
+    select case (self%layout())
+    case (0)
+      do dim = 1, self%rank()
+
+        allocate (tmp(shp(dim), sz/shp(dim)), res(sz/shp(dim)), stat=istat)
+        if (istat /= 0) then
+          write (errormsg, "(i20)") istat
+          errormsg = "MAC: Error #3: failure allocating tmp, res. stat = "//trim(adjustl(errormsg))//"."
+          error stop trim(errormsg)
+        endif
+
+        do stride = 1, sz/shp(dim)
+          tmp(:, stride) = hld(1 + shp(dim)*(stride - 1):shp(dim)*stride)
+          res(stride) = op(tmp(:, stride))
+        enddo
+
+        sz = sz/shp(dim)
+        deallocate (hld)
+        allocate (hld(sz), stat=istat)
+        if (istat /= 0) then
+          write (errormsg, "(i20)") istat
+          errormsg = "MAC: Error #3: failure allocating hld. stat = "//trim(adjustl(errormsg))//"."
+          error stop trim(errormsg)
+        endif
+        hld = res
+        deallocate (tmp, res)
+
+      enddo
+    case (1)
+      do dim = self%rank(), 1, -1
+
+        allocate (tmp(shp(dim), sz/shp(dim)), res(sz/shp(dim)), stat=istat)
+        if (istat /= 0) then
+          write (errormsg, "(i20)") istat
+          errormsg = "MAC: Error #3: failure allocating tmp, res. stat = "//trim(adjustl(errormsg))//"."
+          error stop trim(errormsg)
+        endif
+
+        do stride = 1, sz/shp(dim)
+          tmp(:, stride) = hld(1 + shp(dim)*(stride - 1):shp(dim)*stride)
+          res(stride) = op(tmp(:, stride))
+        enddo
+
+        sz = sz/shp(dim)
+        deallocate (hld)
+        allocate (hld(sz), stat=istat)
+        if (istat /= 0) then
+          write (errormsg, "(i20)") istat
+          errormsg = "MAC: Error #3: failure allocating hld. stat = "//trim(adjustl(errormsg))//"."
+          error stop trim(errormsg)
+        endif
+        hld = res
+        deallocate (tmp, res)
+
+      enddo
+    end select
+
+    ra_l = hld(1)
+
+    deallocate (hld)
+
+  end function ra_l
+
   pure subroutine set_ai(self, val, at)
     class(container), intent(inout) :: self
     integer, intent(in) :: val
@@ -606,6 +1315,190 @@ contains
       "MAC: Error #10: the integer container is not allocated."
     val = self%i_storage(at)
   end subroutine get_mi
+
+  function rd_i(self, op, dim)
+
+    class(container), intent(inout) :: self
+    interface
+      function op(array)
+        import wp
+        integer, intent(in) :: array(:)
+        integer :: op
+      end function op
+    end interface
+    integer, intent(in) :: dim
+
+    type(container) :: rd_i
+
+    integer :: shp(self%rank()), lb(self%rank()), arr(self%rank()), &
+               outshp(self%rank() - 1), outlb(self%rank() - 1), outarr(self%rank() - 1), &
+               vars(self%rank() - 1)
+
+    integer, allocatable :: perm(:, :)
+
+    integer, allocatable :: tmp(:)
+    integer :: res
+
+    integer :: i, j
+    logical :: dim_passed
+
+    character(len=1024) :: errormsg
+    integer :: istat
+
+    if (.not. (self%container_initialized)) error stop &
+      "MAC: Error #6: container not initialized."
+
+    if ((dim > self%rank()) .or. (dim < 1)) error stop &
+      "MAC: Error #14: dim does not reference a valid dimension label."
+
+    shp = self%shape()
+    lb = self%lbounds()
+    dim_passed = .false.
+    do i = 1, self%rank() - 1
+      if (i == dim) dim_passed = .true.
+      if (dim_passed) then
+        outshp(i) = shp(i + 1)
+        outlb(i) = lb(i + 1)
+        vars(i) = i + 1
+      else
+        outshp(i) = shp(i)
+        outlb(i) = lb(i)
+        vars(i) = i
+      endif
+    enddo
+
+    perm = self%partial_permutation(vars)
+
+    allocate (tmp(shp(dim)), stat=istat)
+    if (istat /= 0) then
+      write (errormsg, "(i20)") istat
+      errormsg = "MAC: Error #3: failure allocating tmp. stat = "//trim(adjustl(errormsg))//"."
+      error stop trim(errormsg)
+    endif
+
+    call rd_i%construct(self%container_type, outshp, outlb, self%lyt)
+
+    do i = 1, size(perm(:, 1))
+      arr = perm(i, :)
+      dim_passed = .false.
+      do j = 1, self%rank() - 1
+        if (j == dim) dim_passed = .true.
+        if (dim_passed) then
+          outarr(j) = arr(j + 1)
+        else
+          outarr(j) = arr(j)
+        endif
+      enddo
+      do j = 1, shp(dim)
+        call self%get(val=tmp(j), at=arr)
+      enddo
+      res = op(tmp)
+      call rd_i%set(val=res, at=outarr)
+    enddo
+
+    deallocate (perm)
+
+  end function rd_i
+
+  function ra_i(self, op)
+
+    class(container), intent(inout) :: self
+    interface
+      function op(array)
+        import wp
+        integer, intent(in) :: array(:)
+        integer :: op
+      end function
+    end interface
+
+    integer :: ra_i
+
+    integer :: shp(self%rank()), sz
+
+    integer, allocatable :: tmp(:, :), hld(:), res(:)
+
+    integer :: dim, stride
+
+    character(len=1024) :: errormsg
+    integer :: istat
+
+    if (.not. (self%container_initialized)) error stop &
+      "MAC: Error #6: container not initialized."
+
+    shp = self%shape()
+    sz = self%size()
+
+    allocate (hld(sz), stat=istat)
+    if (istat /= 0) then
+      write (errormsg, "(i20)") istat
+      errormsg = "MAC: Error #3: failure allocating hld. stat = "//trim(adjustl(errormsg))//"."
+      error stop trim(errormsg)
+    endif
+
+    hld = self%i_storage
+
+    select case (self%layout())
+    case (0)
+      do dim = 1, self%rank()
+
+        allocate (tmp(shp(dim), sz/shp(dim)), res(sz/shp(dim)), stat=istat)
+        if (istat /= 0) then
+          write (errormsg, "(i20)") istat
+          errormsg = "MAC: Error #3: failure allocating tmp, res. stat = "//trim(adjustl(errormsg))//"."
+          error stop trim(errormsg)
+        endif
+
+        do stride = 1, sz/shp(dim)
+          tmp(:, stride) = hld(1 + shp(dim)*(stride - 1):shp(dim)*stride)
+          res(stride) = op(tmp(:, stride))
+        enddo
+
+        sz = sz/shp(dim)
+        deallocate (hld)
+        allocate (hld(sz), stat=istat)
+        if (istat /= 0) then
+          write (errormsg, "(i20)") istat
+          errormsg = "MAC: Error #3: failure allocating hld. stat = "//trim(adjustl(errormsg))//"."
+          error stop trim(errormsg)
+        endif
+        hld = res
+        deallocate (tmp, res)
+
+      enddo
+    case (1)
+      do dim = self%rank(), 1, -1
+
+        allocate (tmp(shp(dim), sz/shp(dim)), res(sz/shp(dim)), stat=istat)
+        if (istat /= 0) then
+          write (errormsg, "(i20)") istat
+          errormsg = "MAC: Error #3: failure allocating tmp, res. stat = "//trim(adjustl(errormsg))//"."
+          error stop trim(errormsg)
+        endif
+
+        do stride = 1, sz/shp(dim)
+          tmp(:, stride) = hld(1 + shp(dim)*(stride - 1):shp(dim)*stride)
+          res(stride) = op(tmp(:, stride))
+        enddo
+
+        sz = sz/shp(dim)
+        deallocate (hld)
+        allocate (hld(sz), stat=istat)
+        if (istat /= 0) then
+          write (errormsg, "(i20)") istat
+          errormsg = "MAC: Error #3: failure allocating hld. stat = "//trim(adjustl(errormsg))//"."
+          error stop trim(errormsg)
+        endif
+        hld = res
+        deallocate (tmp, res)
+
+      enddo
+    end select
+
+    ra_i = hld(1)
+
+    deallocate (hld)
+
+  end function ra_i
 
   pure subroutine set_ar(self, val, at)
     class(container), intent(inout) :: self
@@ -683,6 +1576,190 @@ contains
     val = self%r_storage(at)
   end subroutine get_mr
 
+  function rd_r(self, op, dim)
+
+    class(container), intent(inout) :: self
+    interface
+      function op(array)
+        import wp
+        real, intent(in) :: array(:)
+        real :: op
+      end function op
+    end interface
+    integer, intent(in) :: dim
+
+    type(container) :: rd_r
+
+    integer :: shp(self%rank()), lb(self%rank()), arr(self%rank()), &
+               outshp(self%rank() - 1), outlb(self%rank() - 1), outarr(self%rank() - 1), &
+               vars(self%rank() - 1)
+
+    integer, allocatable :: perm(:, :)
+
+    real, allocatable :: tmp(:)
+    real :: res
+
+    integer :: i, j
+    logical :: dim_passed
+
+    character(len=1024) :: errormsg
+    integer :: istat
+
+    if (.not. (self%container_initialized)) error stop &
+      "MAC: Error #6: container not initialized."
+
+    if ((dim > self%rank()) .or. (dim < 1)) error stop &
+      "MAC: Error #14: dim does not reference a valid dimension label."
+
+    shp = self%shape()
+    lb = self%lbounds()
+    dim_passed = .false.
+    do i = 1, self%rank() - 1
+      if (i == dim) dim_passed = .true.
+      if (dim_passed) then
+        outshp(i) = shp(i + 1)
+        outlb(i) = lb(i + 1)
+        vars(i) = i + 1
+      else
+        outshp(i) = shp(i)
+        outlb(i) = lb(i)
+        vars(i) = i
+      endif
+    enddo
+
+    perm = self%partial_permutation(vars)
+
+    allocate (tmp(shp(dim)), stat=istat)
+    if (istat /= 0) then
+      write (errormsg, "(i20)") istat
+      errormsg = "MAC: Error #3: failure allocating tmp. stat = "//trim(adjustl(errormsg))//"."
+      error stop trim(errormsg)
+    endif
+
+    call rd_r%construct(self%container_type, outshp, outlb, self%lyt)
+
+    do i = 1, size(perm(:, 1))
+      arr = perm(i, :)
+      dim_passed = .false.
+      do j = 1, self%rank() - 1
+        if (j == dim) dim_passed = .true.
+        if (dim_passed) then
+          outarr(j) = arr(j + 1)
+        else
+          outarr(j) = arr(j)
+        endif
+      enddo
+      do j = 1, shp(dim)
+        call self%get(val=tmp(j), at=arr)
+      enddo
+      res = op(tmp)
+      call rd_r%set(val=res, at=outarr)
+    enddo
+
+    deallocate (perm)
+
+  end function rd_r
+
+  function ra_r(self, op)
+
+    class(container), intent(inout) :: self
+    interface
+      function op(array)
+        import wp
+        real, intent(in) :: array(:)
+        real :: op
+      end function
+    end interface
+
+    real :: ra_r
+
+    integer :: shp(self%rank()), sz
+
+    real, allocatable :: tmp(:, :), hld(:), res(:)
+
+    integer :: dim, stride
+
+    character(len=1024) :: errormsg
+    integer :: istat
+
+    if (.not. (self%container_initialized)) error stop &
+      "MAC: Error #6: container not initialized."
+
+    shp = self%shape()
+    sz = self%size()
+
+    allocate (hld(sz), stat=istat)
+    if (istat /= 0) then
+      write (errormsg, "(i20)") istat
+      errormsg = "MAC: Error #3: failure allocating hld. stat = "//trim(adjustl(errormsg))//"."
+      error stop trim(errormsg)
+    endif
+
+    hld = self%r_storage
+
+    select case (self%layout())
+    case (0)
+      do dim = 1, self%rank()
+
+        allocate (tmp(shp(dim), sz/shp(dim)), res(sz/shp(dim)), stat=istat)
+        if (istat /= 0) then
+          write (errormsg, "(i20)") istat
+          errormsg = "MAC: Error #3: failure allocating tmp, res. stat = "//trim(adjustl(errormsg))//"."
+          error stop trim(errormsg)
+        endif
+
+        do stride = 1, sz/shp(dim)
+          tmp(:, stride) = hld(1 + shp(dim)*(stride - 1):shp(dim)*stride)
+          res(stride) = op(tmp(:, stride))
+        enddo
+
+        sz = sz/shp(dim)
+        deallocate (hld)
+        allocate (hld(sz), stat=istat)
+        if (istat /= 0) then
+          write (errormsg, "(i20)") istat
+          errormsg = "MAC: Error #3: failure allocating hld. stat = "//trim(adjustl(errormsg))//"."
+          error stop trim(errormsg)
+        endif
+        hld = res
+        deallocate (tmp, res)
+
+      enddo
+    case (1)
+      do dim = self%rank(), 1, -1
+
+        allocate (tmp(shp(dim), sz/shp(dim)), res(sz/shp(dim)), stat=istat)
+        if (istat /= 0) then
+          write (errormsg, "(i20)") istat
+          errormsg = "MAC: Error #3: failure allocating tmp, res. stat = "//trim(adjustl(errormsg))//"."
+          error stop trim(errormsg)
+        endif
+
+        do stride = 1, sz/shp(dim)
+          tmp(:, stride) = hld(1 + shp(dim)*(stride - 1):shp(dim)*stride)
+          res(stride) = op(tmp(:, stride))
+        enddo
+
+        sz = sz/shp(dim)
+        deallocate (hld)
+        allocate (hld(sz), stat=istat)
+        if (istat /= 0) then
+          write (errormsg, "(i20)") istat
+          errormsg = "MAC: Error #3: failure allocating hld. stat = "//trim(adjustl(errormsg))//"."
+          error stop trim(errormsg)
+        endif
+        hld = res
+        deallocate (tmp, res)
+
+      enddo
+    end select
+
+    ra_r = hld(1)
+
+    deallocate (hld)
+
+  end function ra_r
+
   pure subroutine set_ac(self, val, at)
     class(container), intent(inout) :: self
     complex, intent(in) :: val
@@ -758,6 +1835,190 @@ contains
       "MAC: Error #10: the complex container is not allocated."
     val = self%c_storage(at)
   end subroutine get_mc
+
+  function rd_c(self, op, dim)
+
+    class(container), intent(inout) :: self
+    interface
+      function op(array)
+        import wp
+        complex, intent(in) :: array(:)
+        complex :: op
+      end function op
+    end interface
+    integer, intent(in) :: dim
+
+    type(container) :: rd_c
+
+    integer :: shp(self%rank()), lb(self%rank()), arr(self%rank()), &
+               outshp(self%rank() - 1), outlb(self%rank() - 1), outarr(self%rank() - 1), &
+               vars(self%rank() - 1)
+
+    integer, allocatable :: perm(:, :)
+
+    complex, allocatable :: tmp(:)
+    complex :: res
+
+    integer :: i, j
+    logical :: dim_passed
+
+    character(len=1024) :: errormsg
+    integer :: istat
+
+    if (.not. (self%container_initialized)) error stop &
+      "MAC: Error #6: container not initialized."
+
+    if ((dim > self%rank()) .or. (dim < 1)) error stop &
+      "MAC: Error #14: dim does not reference a valid dimension label."
+
+    shp = self%shape()
+    lb = self%lbounds()
+    dim_passed = .false.
+    do i = 1, self%rank() - 1
+      if (i == dim) dim_passed = .true.
+      if (dim_passed) then
+        outshp(i) = shp(i + 1)
+        outlb(i) = lb(i + 1)
+        vars(i) = i + 1
+      else
+        outshp(i) = shp(i)
+        outlb(i) = lb(i)
+        vars(i) = i
+      endif
+    enddo
+
+    perm = self%partial_permutation(vars)
+
+    allocate (tmp(shp(dim)), stat=istat)
+    if (istat /= 0) then
+      write (errormsg, "(i20)") istat
+      errormsg = "MAC: Error #3: failure allocating tmp. stat = "//trim(adjustl(errormsg))//"."
+      error stop trim(errormsg)
+    endif
+
+    call rd_c%construct(self%container_type, outshp, outlb, self%lyt)
+
+    do i = 1, size(perm(:, 1))
+      arr = perm(i, :)
+      dim_passed = .false.
+      do j = 1, self%rank() - 1
+        if (j == dim) dim_passed = .true.
+        if (dim_passed) then
+          outarr(j) = arr(j + 1)
+        else
+          outarr(j) = arr(j)
+        endif
+      enddo
+      do j = 1, shp(dim)
+        call self%get(val=tmp(j), at=arr)
+      enddo
+      res = op(tmp)
+      call rd_c%set(val=res, at=outarr)
+    enddo
+
+    deallocate (perm)
+
+  end function rd_c
+
+  function ra_c(self, op)
+
+    class(container), intent(inout) :: self
+    interface
+      function op(array)
+        import wp
+        complex, intent(in) :: array(:)
+        complex :: op
+      end function
+    end interface
+
+    complex :: ra_c
+
+    integer :: shp(self%rank()), sz
+
+    complex, allocatable :: tmp(:, :), hld(:), res(:)
+
+    integer :: dim, stride
+
+    character(len=1024) :: errormsg
+    integer :: istat
+
+    if (.not. (self%container_initialized)) error stop &
+      "MAC: Error #6: container not initialized."
+
+    shp = self%shape()
+    sz = self%size()
+
+    allocate (hld(sz), stat=istat)
+    if (istat /= 0) then
+      write (errormsg, "(i20)") istat
+      errormsg = "MAC: Error #3: failure allocating hld. stat = "//trim(adjustl(errormsg))//"."
+      error stop trim(errormsg)
+    endif
+
+    hld = self%c_storage
+
+    select case (self%layout())
+    case (0)
+      do dim = 1, self%rank()
+
+        allocate (tmp(shp(dim), sz/shp(dim)), res(sz/shp(dim)), stat=istat)
+        if (istat /= 0) then
+          write (errormsg, "(i20)") istat
+          errormsg = "MAC: Error #3: failure allocating tmp, res. stat = "//trim(adjustl(errormsg))//"."
+          error stop trim(errormsg)
+        endif
+
+        do stride = 1, sz/shp(dim)
+          tmp(:, stride) = hld(1 + shp(dim)*(stride - 1):shp(dim)*stride)
+          res(stride) = op(tmp(:, stride))
+        enddo
+
+        sz = sz/shp(dim)
+        deallocate (hld)
+        allocate (hld(sz), stat=istat)
+        if (istat /= 0) then
+          write (errormsg, "(i20)") istat
+          errormsg = "MAC: Error #3: failure allocating hld. stat = "//trim(adjustl(errormsg))//"."
+          error stop trim(errormsg)
+        endif
+        hld = res
+        deallocate (tmp, res)
+
+      enddo
+    case (1)
+      do dim = self%rank(), 1, -1
+
+        allocate (tmp(shp(dim), sz/shp(dim)), res(sz/shp(dim)), stat=istat)
+        if (istat /= 0) then
+          write (errormsg, "(i20)") istat
+          errormsg = "MAC: Error #3: failure allocating tmp, res. stat = "//trim(adjustl(errormsg))//"."
+          error stop trim(errormsg)
+        endif
+
+        do stride = 1, sz/shp(dim)
+          tmp(:, stride) = hld(1 + shp(dim)*(stride - 1):shp(dim)*stride)
+          res(stride) = op(tmp(:, stride))
+        enddo
+
+        sz = sz/shp(dim)
+        deallocate (hld)
+        allocate (hld(sz), stat=istat)
+        if (istat /= 0) then
+          write (errormsg, "(i20)") istat
+          errormsg = "MAC: Error #3: failure allocating hld. stat = "//trim(adjustl(errormsg))//"."
+          error stop trim(errormsg)
+        endif
+        hld = res
+        deallocate (tmp, res)
+
+      enddo
+    end select
+
+    ra_c = hld(1)
+
+    deallocate (hld)
+
+  end function ra_c
 
   pure subroutine set_ardp(self, val, at)
     class(container), intent(inout) :: self
@@ -835,6 +2096,190 @@ contains
     val = self%rdp_storage(at)
   end subroutine get_mrdp
 
+  function rd_rdp(self, op, dim)
+
+    class(container), intent(inout) :: self
+    interface
+      function op(array)
+        import wp
+        real(wp), intent(in) :: array(:)
+        real(wp) :: op
+      end function op
+    end interface
+    integer, intent(in) :: dim
+
+    type(container) :: rd_rdp
+
+    integer :: shp(self%rank()), lb(self%rank()), arr(self%rank()), &
+               outshp(self%rank() - 1), outlb(self%rank() - 1), outarr(self%rank() - 1), &
+               vars(self%rank() - 1)
+
+    integer, allocatable :: perm(:, :)
+
+    real(wp), allocatable :: tmp(:)
+    real(wp) :: res
+
+    integer :: i, j
+    logical :: dim_passed
+
+    character(len=1024) :: errormsg
+    integer :: istat
+
+    if (.not. (self%container_initialized)) error stop &
+      "MAC: Error #6: container not initialized."
+
+    if ((dim > self%rank()) .or. (dim < 1)) error stop &
+      "MAC: Error #14: dim does not reference a valid dimension label."
+
+    shp = self%shape()
+    lb = self%lbounds()
+    dim_passed = .false.
+    do i = 1, self%rank() - 1
+      if (i == dim) dim_passed = .true.
+      if (dim_passed) then
+        outshp(i) = shp(i + 1)
+        outlb(i) = lb(i + 1)
+        vars(i) = i + 1
+      else
+        outshp(i) = shp(i)
+        outlb(i) = lb(i)
+        vars(i) = i
+      endif
+    enddo
+
+    perm = self%partial_permutation(vars)
+
+    allocate (tmp(shp(dim)), stat=istat)
+    if (istat /= 0) then
+      write (errormsg, "(i20)") istat
+      errormsg = "MAC: Error #3: failure allocating tmp. stat = "//trim(adjustl(errormsg))//"."
+      error stop trim(errormsg)
+    endif
+
+    call rd_rdp%construct(self%container_type, outshp, outlb, self%lyt)
+
+    do i = 1, size(perm(:, 1))
+      arr = perm(i, :)
+      dim_passed = .false.
+      do j = 1, self%rank() - 1
+        if (j == dim) dim_passed = .true.
+        if (dim_passed) then
+          outarr(j) = arr(j + 1)
+        else
+          outarr(j) = arr(j)
+        endif
+      enddo
+      do j = 1, shp(dim)
+        call self%get(val=tmp(j), at=arr)
+      enddo
+      res = op(tmp)
+      call rd_rdp%set(val=res, at=outarr)
+    enddo
+
+    deallocate (perm)
+
+  end function rd_rdp
+
+  function ra_rdp(self, op)
+
+    class(container), intent(inout) :: self
+    interface
+      function op(array)
+        import wp
+        real(wp), intent(in) :: array(:)
+        real(wp) :: op
+      end function
+    end interface
+
+    real(wp) :: ra_rdp
+
+    integer :: shp(self%rank()), sz
+
+    real(wp), allocatable :: tmp(:, :), hld(:), res(:)
+
+    integer :: dim, stride
+
+    character(len=1024) :: errormsg
+    integer :: istat
+
+    if (.not. (self%container_initialized)) error stop &
+      "MAC: Error #6: container not initialized."
+
+    shp = self%shape()
+    sz = self%size()
+
+    allocate (hld(sz), stat=istat)
+    if (istat /= 0) then
+      write (errormsg, "(i20)") istat
+      errormsg = "MAC: Error #3: failure allocating hld. stat = "//trim(adjustl(errormsg))//"."
+      error stop trim(errormsg)
+    endif
+
+    hld = self%rdp_storage
+
+    select case (self%layout())
+    case (0)
+      do dim = 1, self%rank()
+
+        allocate (tmp(shp(dim), sz/shp(dim)), res(sz/shp(dim)), stat=istat)
+        if (istat /= 0) then
+          write (errormsg, "(i20)") istat
+          errormsg = "MAC: Error #3: failure allocating tmp, res. stat = "//trim(adjustl(errormsg))//"."
+          error stop trim(errormsg)
+        endif
+
+        do stride = 1, sz/shp(dim)
+          tmp(:, stride) = hld(1 + shp(dim)*(stride - 1):shp(dim)*stride)
+          res(stride) = op(tmp(:, stride))
+        enddo
+
+        sz = sz/shp(dim)
+        deallocate (hld)
+        allocate (hld(sz), stat=istat)
+        if (istat /= 0) then
+          write (errormsg, "(i20)") istat
+          errormsg = "MAC: Error #3: failure allocating hld. stat = "//trim(adjustl(errormsg))//"."
+          error stop trim(errormsg)
+        endif
+        hld = res
+        deallocate (tmp, res)
+
+      enddo
+    case (1)
+      do dim = self%rank(), 1, -1
+
+        allocate (tmp(shp(dim), sz/shp(dim)), res(sz/shp(dim)), stat=istat)
+        if (istat /= 0) then
+          write (errormsg, "(i20)") istat
+          errormsg = "MAC: Error #3: failure allocating tmp, res. stat = "//trim(adjustl(errormsg))//"."
+          error stop trim(errormsg)
+        endif
+
+        do stride = 1, sz/shp(dim)
+          tmp(:, stride) = hld(1 + shp(dim)*(stride - 1):shp(dim)*stride)
+          res(stride) = op(tmp(:, stride))
+        enddo
+
+        sz = sz/shp(dim)
+        deallocate (hld)
+        allocate (hld(sz), stat=istat)
+        if (istat /= 0) then
+          write (errormsg, "(i20)") istat
+          errormsg = "MAC: Error #3: failure allocating hld. stat = "//trim(adjustl(errormsg))//"."
+          error stop trim(errormsg)
+        endif
+        hld = res
+        deallocate (tmp, res)
+
+      enddo
+    end select
+
+    ra_rdp = hld(1)
+
+    deallocate (hld)
+
+  end function ra_rdp
+
   pure subroutine set_acdp(self, val, at)
     class(container), intent(inout) :: self
     complex(wp), intent(in) :: val
@@ -910,5 +2355,189 @@ contains
       "MAC: Error #10: the complex(wp) container is not allocated."
     val = self%cdp_storage(at)
   end subroutine get_mcdp
+
+  function rd_cdp(self, op, dim)
+
+    class(container), intent(inout) :: self
+    interface
+      function op(array)
+        import wp
+        complex(wp), intent(in) :: array(:)
+        complex(wp) :: op
+      end function op
+    end interface
+    integer, intent(in) :: dim
+
+    type(container) :: rd_cdp
+
+    integer :: shp(self%rank()), lb(self%rank()), arr(self%rank()), &
+               outshp(self%rank() - 1), outlb(self%rank() - 1), outarr(self%rank() - 1), &
+               vars(self%rank() - 1)
+
+    integer, allocatable :: perm(:, :)
+
+    complex(wp), allocatable :: tmp(:)
+    complex(wp) :: res
+
+    integer :: i, j
+    logical :: dim_passed
+
+    character(len=1024) :: errormsg
+    integer :: istat
+
+    if (.not. (self%container_initialized)) error stop &
+      "MAC: Error #6: container not initialized."
+
+    if ((dim > self%rank()) .or. (dim < 1)) error stop &
+      "MAC: Error #14: dim does not reference a valid dimension label."
+
+    shp = self%shape()
+    lb = self%lbounds()
+    dim_passed = .false.
+    do i = 1, self%rank() - 1
+      if (i == dim) dim_passed = .true.
+      if (dim_passed) then
+        outshp(i) = shp(i + 1)
+        outlb(i) = lb(i + 1)
+        vars(i) = i + 1
+      else
+        outshp(i) = shp(i)
+        outlb(i) = lb(i)
+        vars(i) = i
+      endif
+    enddo
+
+    perm = self%partial_permutation(vars)
+
+    allocate (tmp(shp(dim)), stat=istat)
+    if (istat /= 0) then
+      write (errormsg, "(i20)") istat
+      errormsg = "MAC: Error #3: failure allocating tmp. stat = "//trim(adjustl(errormsg))//"."
+      error stop trim(errormsg)
+    endif
+
+    call rd_cdp%construct(self%container_type, outshp, outlb, self%lyt)
+
+    do i = 1, size(perm(:, 1))
+      arr = perm(i, :)
+      dim_passed = .false.
+      do j = 1, self%rank() - 1
+        if (j == dim) dim_passed = .true.
+        if (dim_passed) then
+          outarr(j) = arr(j + 1)
+        else
+          outarr(j) = arr(j)
+        endif
+      enddo
+      do j = 1, shp(dim)
+        call self%get(val=tmp(j), at=arr)
+      enddo
+      res = op(tmp)
+      call rd_cdp%set(val=res, at=outarr)
+    enddo
+
+    deallocate (perm)
+
+  end function rd_cdp
+
+  function ra_cdp(self, op)
+
+    class(container), intent(inout) :: self
+    interface
+      function op(array)
+        import wp
+        complex(wp), intent(in) :: array(:)
+        complex(wp) :: op
+      end function
+    end interface
+
+    complex(wp) :: ra_cdp
+
+    integer :: shp(self%rank()), sz
+
+    complex(wp), allocatable :: tmp(:, :), hld(:), res(:)
+
+    integer :: dim, stride
+
+    character(len=1024) :: errormsg
+    integer :: istat
+
+    if (.not. (self%container_initialized)) error stop &
+      "MAC: Error #6: container not initialized."
+
+    shp = self%shape()
+    sz = self%size()
+
+    allocate (hld(sz), stat=istat)
+    if (istat /= 0) then
+      write (errormsg, "(i20)") istat
+      errormsg = "MAC: Error #3: failure allocating hld. stat = "//trim(adjustl(errormsg))//"."
+      error stop trim(errormsg)
+    endif
+
+    hld = self%cdp_storage
+
+    select case (self%layout())
+    case (0)
+      do dim = 1, self%rank()
+
+        allocate (tmp(shp(dim), sz/shp(dim)), res(sz/shp(dim)), stat=istat)
+        if (istat /= 0) then
+          write (errormsg, "(i20)") istat
+          errormsg = "MAC: Error #3: failure allocating tmp, res. stat = "//trim(adjustl(errormsg))//"."
+          error stop trim(errormsg)
+        endif
+
+        do stride = 1, sz/shp(dim)
+          tmp(:, stride) = hld(1 + shp(dim)*(stride - 1):shp(dim)*stride)
+          res(stride) = op(tmp(:, stride))
+        enddo
+
+        sz = sz/shp(dim)
+        deallocate (hld)
+        allocate (hld(sz), stat=istat)
+        if (istat /= 0) then
+          write (errormsg, "(i20)") istat
+          errormsg = "MAC: Error #3: failure allocating hld. stat = "//trim(adjustl(errormsg))//"."
+          error stop trim(errormsg)
+        endif
+        hld = res
+        deallocate (tmp, res)
+
+      enddo
+    case (1)
+      do dim = self%rank(), 1, -1
+
+        allocate (tmp(shp(dim), sz/shp(dim)), res(sz/shp(dim)), stat=istat)
+        if (istat /= 0) then
+          write (errormsg, "(i20)") istat
+          errormsg = "MAC: Error #3: failure allocating tmp, res. stat = "//trim(adjustl(errormsg))//"."
+          error stop trim(errormsg)
+        endif
+
+        do stride = 1, sz/shp(dim)
+          tmp(:, stride) = hld(1 + shp(dim)*(stride - 1):shp(dim)*stride)
+          res(stride) = op(tmp(:, stride))
+        enddo
+
+        sz = sz/shp(dim)
+        deallocate (hld)
+        allocate (hld(sz), stat=istat)
+        if (istat /= 0) then
+          write (errormsg, "(i20)") istat
+          errormsg = "MAC: Error #3: failure allocating hld. stat = "//trim(adjustl(errormsg))//"."
+          error stop trim(errormsg)
+        endif
+        hld = res
+        deallocate (tmp, res)
+
+      enddo
+    end select
+
+    ra_cdp = hld(1)
+
+    deallocate (hld)
+
+  end function ra_cdp
 
 end module MAC

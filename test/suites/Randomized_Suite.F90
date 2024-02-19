@@ -62,7 +62,7 @@ contains
         call r%set(val=log(real(i, wp)), at=r%ind(r%ind(i)))
       enddo
       call random_number(random)
-      i = nint(1.0_wp + r%size()*random)
+      i = nint(1.0_wp + (r%size() - 1)*random)
       call r%get(val=check, at=r%ind(i))
       if (abs(real(i, wp) - exp(check)) > 1.0E10_wp*epsilon(1.0_wp)) then
         allocate (error)

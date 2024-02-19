@@ -1270,6 +1270,10 @@ contains
     if (.not. (self%container_initialized)) error stop &
       "MAC: Error #6: container not initialized."
 
+    if (size(at) + size(dims) /= self%rank()) error stop &
+      "MAC: Error #16: the number of components of 'dims'&
+      & and 'at' are not conformable with the rank of the container."
+
     do i = 1, size(dims)
       if ((dims(i) > self%rank()) .or. (dims(i) < 1)) then
         write (errormsg, "(i20)") i

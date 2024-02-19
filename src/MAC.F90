@@ -73,6 +73,7 @@ module MAC
       ra_l, ra_i, ra_r, ra_c, ra_rdp, ra_cdp
     generic, public :: reduce => rd_l, rd_i, rd_r, rd_c, rd_rdp, rd_cdp, &
       ra_l, ra_i, ra_r, ra_c, ra_rdp, ra_cdp
+    procedure, pass(self), public :: section => get_section
   end type
 
 contains
@@ -2539,5 +2540,104 @@ contains
     deallocate (hld)
 
   end function ra_cdp
+
+  function get_section(self, dims, at)
+    class(container), intent(in) :: self
+    integer, intent(in) :: dims(:), at(:)
+
+    type(container) :: get_section
+
+    integer, allocatable :: dict(:, :)
+
+    integer :: not_present_dims(self%rank() - size(dims))
+
+    integer :: shp(self%rank()), outshp(size(dims)), &
+               lbs(self%rank()), outlbs(size(dims))
+
+    integer :: i, j, k
+
+    logical :: cond
+
+    character(len=1024) :: errormsg
+
+    if (.not. (self%container_initialized)) error stop &
+      "MAC: Error #6: container not initialized."
+
+    if (size(at) + size(dims) /= self%rank()) error stop &
+      "MAC: Error #16: the number of components of 'dims'&
+      & and 'at' are not conformable with the rank of the container."
+
+    do i = 1, size(dims)
+      if ((dims(i) > self%rank()) .or. (dims(i) < 1)) then
+        write (errormsg, "(i20)") i
+        errormsg = "MAC: Error #14: dims("//trim(adjustl(errormsg))//") does not reference a valid dimension label."
+        error stop trim(errormsg)
+      endif
+      do j = 1, size(dims)
+        if ((i /= j) .and. (dims(i) == dims(j))) error stop &
+          "MAC: Error #15: dims contains repeated dimension label indices."
+      enddo
+    enddo
+
+    k = 1
+    do i = 1, self%rank()
+      cond = .false.
+      if (any(dims == i)) cond = .true.
+      if (cond) then
+        cycle
+      else
+        not_present_dims(k) = i
+        k = k + 1
+      endif
+    enddo
+
+    shp = self%shape()
+    lbs = self%lbounds()
+
+    do i = 1, size(at)
+      j = not_present_dims(i)
+      k = lbs(j)
+      if ((at(i) < lbs(j)) .or. (at(i) > lbs(j) + shp(j) - 1)) then
+        print *, at(i), lbs(j) + shp(j) - 1
+        write (errormsg, "(i20)") i
+        errormsg = "MAC: Error #14: at("//trim(adjustl(errormsg))//") does not reference a valid array layout adress."
+        error stop trim(errormsg)
+      endif
+    enddo
+
+    do i = 1, size(dims)
+      outshp(i) = shp(dims(i))
+      outlbs(i) = lbs(dims(i))
+    enddo
+
+    dict = self%partial_permutation(dims)
+
+    do i = 1, size(at)
+      dict(:, not_present_dims(i)) = at(i)
+    enddo
+
+    call get_section%construct(self%cont_type(), outshp, outlbs, self%layout())
+
+    do i = 1, size(dict(:, 1))
+      j = self%ind(dict(i, :))
+      select case (self%cont_type())
+      case (1)
+        call get_section%set(val=self%l_storage(j), at=i)
+      case (2)
+        call get_section%set(val=self%i_storage(j), at=i)
+      case (3)
+        call get_section%set(val=self%r_storage(j), at=i)
+      case (4)
+        call get_section%set(val=self%c_storage(j), at=i)
+      case (5)
+        call get_section%set(val=self%rdp_storage(j), at=i)
+      case (6)
+        call get_section%set(val=self%cdp_storage(j), at=i)
+      end select
+    enddo
+
+    deallocate (dict)
+
+  end function get_section
 
 end module MAC
